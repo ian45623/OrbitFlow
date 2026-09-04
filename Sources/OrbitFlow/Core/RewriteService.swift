@@ -52,7 +52,73 @@ final class RewriteService: NSObject {
 
     private func run(_ pboard: NSPasteboard, mode: RewriteMode) {
         guard let text = selection(from: pboard) else { return }
-        controller.flash("\(mode.displayName): \(text.prefix(20))…")
+
+        let settings = Settings.shared
+        let provider = settings.aiProvider
+        let model = settings.aiModel
+        let hasKey = Keychain.hasKey(account: provider.rawValue)
+
+        let engine: OnDemandRewrite.Engine
+        switch OnDemandRewrite.engine(
+            use: settings.aiRewriteUse,
+            hasKey: hasKey,
+            model: model,
+            onDeviceAvailable: OnDeviceRewriter.isAvailable
+        ) {
+        case .success(let chosen):
+            engine = chosen
+        case .failure(let reason):
+            controller.flash(reason.summary)
+            return
+        }
+
+        let key = engine == .cloud ? (Keychain.read(account: provider.rawValue) ?? "") : ""
+        controller.setRewriting(true)
+
+        Task { @MainActor in
+            defer { controller.setRewriting(false) }
+            do {
+                // Longer than dictation's 8s. Nothing is queued behind this and the user
+                // asked for it explicitly, so waiting beats a failure they have to
+                // right-click again to retry.
+                let output: String
+                if engine == .cloud {
+                    output = try await CloudRewriter(
+                        provider: provider, key: key, timeout: .seconds(30)
+                    ).rewrite(text, model: model, mode: mode)
+                } else {
+                    output = try await OnDeviceRewriter.rewrite(
+                        text, system: mode.systemPrompt, timeout: .seconds(30)
+                    )
+                }
+                deliver(output, mode: mode)
+            } catch {
+                // The opposite of CloudFormatter's contract, on purpose. Dictation falls
+                // back to the rule pass because an utterance already spoken must not be
+                // lost. Here the user's own words are already on screen and already good
+                // enough to have been written — overwriting a paragraph with a degraded
+                // version of itself because a request timed out is a destructive
+                // surprise on text nobody asked us to touch. So: change nothing.
+                let reason = (error as? RewriteFailure)?.summary
+                    ?? OnDeviceRewriter.describe(error)
+                Log.inject.info("on-demand rewrite failed (\(reason, privacy: .private))")
+                controller.flash("Rewrite failed — \(reason)")
+            }
+        }
+    }
+
+    /// Puts the result where the user can use it.
+    ///
+    /// A selection in a web page or a PDF cannot be replaced, and macOS gives no way to
+    /// know that before trying — `TextInjector` falls back to ⌘V, which a read-only view
+    /// simply ignores, and neither step reports back. So the result also goes on the
+    /// pasteboard and the notice says so, which is true whether or not the injection
+    /// landed. Dictation can inject silently; this cannot.
+    private func deliver(_ output: String, mode: RewriteMode) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(output, forType: .string)
+        TextInjector.insert(output)
+        controller.flash("\(mode.displayName) — also copied to clipboard")
     }
 
     /// Nil when the pasteboard carries nothing usable — an empty selection, or a
