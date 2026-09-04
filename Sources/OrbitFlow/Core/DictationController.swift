@@ -393,8 +393,9 @@ final class DictationController {
                 return
             }
 
-            // Only the cloud tier is slow enough to need saying out loud; rules are
-            // instant and the on-device pass is bounded at four seconds.
+            // Only the cloud rewrite triggered by Always is slow enough to need saying
+            // out loud; rules are instant and the on-device pass is bounded at four
+            // seconds.
             //
             // Both writes are gated on the run token. Discarding does not cancel the tail
             // — it issues a new token and lets the in-flight work finish, suppressing only

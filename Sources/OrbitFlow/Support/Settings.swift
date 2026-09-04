@@ -126,7 +126,8 @@ final class Settings {
         didSet { defaults.set(aiModel, forKey: Keys.aiModel) }
     }
 
-    /// The tone the cloud tier rewrites into.
+    /// The tone AI rewrite uses — for dictation under Always, and for the default
+    /// right-click Services row whenever the setting isn't Off.
     var rewriteMode: RewriteMode {
         didSet { defaults.set(rewriteMode.rawValue, forKey: Keys.rewriteMode) }
     }
@@ -197,7 +198,7 @@ final class Settings {
         ) ?? .anthropic
         aiProvider = resolvedProvider
         aiModel = defaults.string(forKey: Keys.aiModel) ?? resolvedProvider.defaultModel
-        // Faithful by default, so switching the tier on can't change the user's words
+        // Faithful by default, so turning AI rewrite on can't change the user's words
         // until they ask it to.
         rewriteMode = RewriteMode(
             rawValue: defaults.string(forKey: Keys.rewriteMode) ?? ""
