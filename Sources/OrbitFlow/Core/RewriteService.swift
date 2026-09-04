@@ -48,6 +48,14 @@ final class RewriteService: NSObject {
     ) {
         guard let text = selection(from: pboard) else { return }
 
+        // `Off` has no way to hide this row — the menu is a static Info.plist array —
+        // so the setting has to mean something here the same way it does for the other
+        // five rows: filing text to disk and opening the window is not "doing nothing".
+        guard Settings.shared.aiRewriteUse.servesOnDemand else {
+            controller.flash(OnDemandRewrite.Unavailable.turnedOff.summary)
+            return
+        }
+
         // The same call the "Add text" composer makes, with a different engine label so
         // history says where this came from.
         let run = DictationRun(
@@ -66,6 +74,14 @@ final class RewriteService: NSObject {
 
     private func run(_ pboard: NSPasteboard, mode: RewriteMode) {
         guard let text = selection(from: pboard) else { return }
+
+        // Two impatient right-clicks would otherwise mean two billed calls racing to
+        // paste into the same field — the second to land silently overwrites the first.
+        // One in flight at a time is the whole fix; there is no work worth queuing.
+        guard !controller.isRewriting else {
+            controller.flash("Already rewriting — one at a time.")
+            return
+        }
 
         let settings = Settings.shared
         let provider = settings.aiProvider
@@ -104,6 +120,13 @@ final class RewriteService: NSObject {
                     output = try await OnDeviceRewriter.rewrite(
                         text, system: mode.systemPrompt, timeout: .seconds(30)
                     )
+                    // CloudRewriter applies this internally; OnDeviceRewriter deliberately
+                    // applies no policy at all, so the guard has to run here or the
+                    // on-device path would be the one place a model's answer could
+                    // overwrite the selection it was asked to rewrite.
+                    if let reason = RewriteGuard.rejection(original: text, output: output, mode: mode) {
+                        throw RewriteFailure.rejected(reason)
+                    }
                 }
                 deliver(output, mode: mode)
             } catch {
