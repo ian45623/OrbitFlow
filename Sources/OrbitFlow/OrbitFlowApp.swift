@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import OrbitFlowAIRewrite
 
 @main
 struct OrbitFlowApp: App {
@@ -59,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = DictationController()
     private var hud: HUDPanel?
     private var stateObservation: NSObjectProtocol?
+    private var rewriteService: RewriteService?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A regular app now: dock icon, app menu, standard windows. The HUD is still a
@@ -68,8 +70,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hud = HUDPanel(controller: controller)
 
+        // Held in a property because `servicesProvider` is an unowned reference — an
+        // inline instance would deallocate and every right-click row would silently
+        // do nothing. NSUpdateDynamicServices tells the system to re-read Info.plist,
+        // which matters on the launch right after a build changed it.
+        let service = RewriteService(controller: controller)
+        rewriteService = service
+        NSApp.servicesProvider = service
+        NSUpdateDynamicServices()
+
         if !controller.activate() {
-            Permissions.promptForAccessibility()
+            // Only prompt when we're actually untrusted. A tap can fail to be created for
+            // other reasons, and showing the grant dialog to someone who already granted it
+            // is how an app earns a reputation for asking forever.
+            if !Permissions.hasAccessibility { Permissions.promptForAccessibility() }
             // The tap can only be created once the user grants Accessibility, and there's
             // no notification for that — poll until it takes.
             retryActivation()
@@ -168,14 +182,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func observeState() {
         withObservationTracking {
             _ = controller.state
+            _ = controller.notice
+            _ = controller.isRewriting
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.controller.state.isActive {
-                    self.hud?.present()
-                } else {
-                    self.hud?.dismiss()
-                }
+                // The pill is up for a live dictation, for an on-demand rewrite in flight,
+                // and for the three seconds a notice is on screen.
+                let wanted = self.controller.state.isActive
+                    || self.controller.notice != nil
+                    || self.controller.isRewriting
+                if wanted { self.hud?.present() } else { self.hud?.dismiss() }
                 self.observeState()
             }
         }
@@ -196,28 +213,7 @@ private struct MenuContent: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
     @Environment(\.openWindow) private var openWindow
-    @State private var isPreloadingParakeet = false
-    @State private var parakeetOnDisk = ParakeetModels.isDownloaded
-
-    private var parakeetStatus: String {
-        if isPreloadingParakeet { return "Loading Parakeet models…" }
-        // Reflects what's actually on disk, not just what this menu instance has done.
-        return parakeetOnDisk ? "Parakeet models installed ✓" : "Download Parakeet models…"
-    }
-
-    private func preloadParakeet() {
-        guard !isPreloadingParakeet else { return }
-        isPreloadingParakeet = true
-        Task {
-            do {
-                _ = try await ParakeetModels.shared.manager()
-                parakeetOnDisk = ParakeetModels.isDownloaded
-            } catch {
-                Log.speech.error("Parakeet preload failed: \(error.localizedDescription)")
-            }
-            isPreloadingParakeet = false
-        }
-    }
+    @State private var parakeet = ParakeetDownload.shared
 
     var body: some View {
         Text("Hold \(settings.pushToTalkKey.displayName) to dictate")
@@ -236,6 +232,17 @@ private struct MenuContent: View {
             }
         }
 
+        // Meaningful whenever a rewrite can run at all — under On demand this picker is what
+        // the default right-click row reads. Hidden when nothing can use it, because a mode
+        // that changes nothing is worse than no mode at all.
+        if settings.aiRewriteUse != .off {
+            Picker("Rewrite mode", selection: $settings.rewriteMode) {
+                ForEach(RewriteMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+        }
+
         Toggle("Compare mode (both engines)", isOn: $settings.compareMode)
 
         if !settings.compareMode {
@@ -247,14 +254,6 @@ private struct MenuContent: View {
         }
 
         Toggle("Clean up text", isOn: $settings.cleanupEnabled)
-
-        if settings.cleanupEnabled {
-            Toggle("Smart cleanup (on-device AI)", isOn: $settings.smartCleanup)
-                .disabled(!FoundationModelFormatter.isAvailable)
-            if let reason = FoundationModelFormatter.unavailableReason {
-                Text(reason).font(.caption)
-            }
-        }
 
         Toggle("Sound", isOn: $settings.soundEnabled)
 
@@ -273,10 +272,19 @@ private struct MenuContent: View {
         .keyboardShortcut("d")
 
         // Downloading ~470 MB on the first hold would look like a hang, so offer to do it
-        // deliberately instead.
-        if settings.engine == .parakeet {
-            Button(parakeetStatus) { preloadParakeet() }
-                .disabled(isPreloadingParakeet || parakeetOnDisk)
+        // deliberately instead. Silent once it's installed — a permanent "✓ installed" row
+        // is a menu item that can never do anything.
+        if settings.engine == .parakeet || settings.compareMode {
+            switch parakeet.phase {
+            case .ready:
+                EmptyView()
+            case .working(let label, let fraction):
+                Text("\(label) Parakeet… \(Int(fraction * 100))%")
+            case .missing:
+                Button("Download Parakeet model (470 MB)…") { parakeet.start() }
+            case .failed:
+                Button("Parakeet download failed — try again") { parakeet.start() }
+            }
         }
 
         if !Permissions.hasAccessibility {

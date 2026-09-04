@@ -14,7 +14,7 @@ final class HUDPanel: NSPanel {
     /// exactly to the panel has nowhere to put its shadow: the blur is cut off flush at the
     /// edge and the corners read as hard squares instead of fading out. The margin has to
     /// clear `DS.Shadow.hud`'s radius *plus* its downward offset.
-    static let shadowMargin: CGFloat = 28
+    static let shadowMargin: CGFloat = 12
 
     /// The window size for a given pill: the capsule plus margin on all sides.
     static func panelSize(for hud: HUDSize) -> CGSize {
@@ -24,7 +24,13 @@ final class HUDPanel: NSPanel {
         )
     }
 
+    /// Read in `present()` to decide whether this pill needs to be full-sized for a
+    /// notice. Stored rather than reaching for a shared singleton so the panel doesn't
+    /// need to know how the controller it was handed relates to anything else.
+    private let controller: DictationController
+
     init(controller: DictationController) {
+        self.controller = controller
         super.init(
             contentRect: NSRect(origin: .zero, size: Self.panelSize(for: Settings.shared.hudSize)),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -82,8 +88,12 @@ final class HUDPanel: NSPanel {
         guard !isVisible || alphaValue < 1 else { return }
 
         // The pill size is a setting, and this is the only moment it can change without the
-        // user seeing it resize under them.
-        setContentSize(Self.panelSize(for: Settings.shared.hudSize))
+        // user seeing it resize under them. A notice overrides the setting — see
+        // `DictationController.needsFullHUD` — and every state that can carry one always
+        // arrives here from hidden, so the override never fights this guard's own
+        // flicker prevention.
+        let hud = controller.needsFullHUD ? HUDSize.full : Settings.shared.hudSize
+        setContentSize(Self.panelSize(for: hud))
         reposition()
         alphaValue = 0
         orderFrontRegardless()

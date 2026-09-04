@@ -11,7 +11,12 @@ struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
 
-    private var hud: HUDSize { settings.hudSize }
+    // A notice — or an on-demand rewrite running with no dictation behind it — borrows
+    // Full's size regardless of the setting: Compact's 104×26 pill was sized for a
+    // waveform, and the on-demand path's messages are the feature's only feedback
+    // channel. `HUDPanel` makes the identical decision for the window itself, so the
+    // NSPanel's bounds and what SwiftUI draws inside it never disagree.
+    private var hud: HUDSize { controller.needsFullHUD ? .full : settings.hudSize }
     private var isListening: Bool { controller.state.isActive }
 
     var body: some View {
@@ -47,8 +52,7 @@ struct HUDView: View {
                 style: .continuous
             )
             shape
-                .fill(.ultraThinMaterial)
-                .overlay(shape.fill(DS.Color.hudSurface))
+                .fill(DS.Color.hudSurface)
                 .overlay(shape.strokeBorder(DS.Color.hudEdge, lineWidth: DS.Border.hairline))
                 .shadow(
                     color: DS.Shadow.hud.color,
@@ -69,7 +73,7 @@ struct HUDView: View {
     /// True once there are real words to read, which is when the label stops being
     /// interface chrome and becomes the transcript.
     private var hasTranscript: Bool {
-        !isError && !controller.transcript.isEmpty
+        !isError && controller.notice == nil && !controller.transcript.isEmpty
     }
 
     // Errors are amber, not red: red in this app means recording, and a failed dictation
@@ -80,14 +84,21 @@ struct HUDView: View {
     }
 
     private var label: String {
+        // Both of these can be true while the state is `.idle` — an on-demand rewrite runs
+        // with no dictation behind it — so they are checked before the state at all.
+        if let notice = controller.notice { return notice }
+        if case .idle = controller.state, controller.isRewriting { return "Rewriting…" }
+
         switch controller.state {
-        case .starting: "Listening…"
-        case .listening: controller.transcript.isEmpty ? "Listening…" : controller.transcript
+        case .starting: return "Listening…"
+        case .listening: return controller.transcript.isEmpty ? "Listening…" : controller.transcript
         // Parakeet transcribes in one pass on release, so there's nothing to show until
         // it lands — say what's happening instead of leaving an empty pill.
-        case .finishing: controller.transcript.isEmpty ? "Transcribing…" : controller.transcript
-        case .error(let message): message
-        case .idle: ""
+        case .finishing:
+            if controller.isRewriting { return "Rewriting…" }
+            return controller.transcript.isEmpty ? "Transcribing…" : controller.transcript
+        case .error(let message): return message
+        case .idle: return ""
         }
     }
 }

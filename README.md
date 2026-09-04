@@ -1,7 +1,8 @@
 # Orbit Flow
 
 Push-to-talk dictation for macOS. Hold a key, talk, release — cleaned-up text lands in
-whatever text field has focus. A Wispr Flow-shaped app, built native and fully on-device.
+whatever text field has focus. A Wispr Flow-shaped app, built native and on-device by
+default — with one opt-in tier that isn't. See "AI rewrite" below.
 
 **Status:** working skeleton. Builds, launches, arms the hotkey, transcribes, injects.
 Branding and the LLM cleanup tier are the next passes.
@@ -159,22 +160,95 @@ change.
 
 ---
 
+## AI rewrite
+
+**Off by default.** Everything else in this app runs on your Mac. AI rewrite is the one
+feature that doesn't have to, which is why it's opt-in, and why even once it's on, the
+default mode — Faithful — changes nothing about your wording until you pick a mode that's
+allowed to.
+
+**AI rewrite** in Settings ▸ Cleanup is a three-way setting, not a toggle:
+
+| | |
+|---|---|
+| **Off** | No AI rewrite anywhere. Dictation pastes rule- or on-device-cleaned text. |
+| **On demand** | Dictation pastes cleaned text, untouched by AI. You rewrite by selecting text and asking for it — see "Rewriting text you didn't dictate" below. |
+| **Always** | Every dictation is rewritten before it pastes, on top of everything On demand gives you. |
+
+Under **Always**, the transcript of each dictation is sent to a provider you choose —
+Anthropic, OpenAI, OpenRouter, Gemini, or DeepSeek — using **your own API key**, and comes
+back rewritten. Switch to a provider with no saved key while Always is selected and the
+setting drops back to On demand rather than silently failing on every utterance.
+
+| | |
+|---|---|
+| **What is sent** | The transcript text and the mode instruction. Nothing else. |
+| **What is never sent** | Audio. Your recordings never leave the Mac under any setting. |
+| **Where the key lives** | The macOS Keychain, not `UserDefaults`, and not synced to iCloud. One key per provider. |
+| **Who is billed** | You are, by your provider, at their rates. |
+| **If it fails** | The rule-based cleanup runs instead and your text still pastes. A network problem never costs you an utterance. |
+
+### Modes
+
+| Mode | What it does |
+|---|---|
+| **Faithful** | Cleans up what you said and leaves your wording alone. The default. |
+| **Casual** | Relaxed and conversational, the way you'd write to a colleague you know well. |
+| **Professional** | Clear business English. No slang, no filler, no padding. |
+| **Problem-solver** | Professional and polite, framed as a proposal. Won't invent a solution you didn't say. |
+
+Switch modes from the menu bar without opening Settings.
+
+**One limitation worth knowing.** Every mode's prompt tells the model that a dictated
+question stays a question rather than something to answer. In Faithful mode there's also a
+programmatic check that refuses any output containing words you didn't say — which is what
+catches the classic failure where you dictate "what's the capital of France" and get "The
+capital of France is Paris." typed into your document. That check **cannot** apply to the
+rewriting modes, because introducing words is exactly what they're for. If you dictate
+questions a lot, Faithful is the safer mode.
+
+### Rewriting text you didn't dictate
+
+Set **AI rewrite** to **On demand** and dictation pastes clean, untouched text —
+the rewrite waits until you ask for it.
+
+Select text in any app and right-click ▸ **Services**:
+
+- **Rewrite with Orbit Flow** — rewrites the selection in place, using the mode
+  set in Settings or the menu bar.
+- **Orbit Flow ▸ Faithful / Casual / Professional / Problem-solver** — the same,
+  with the mode chosen at the moment you use it.
+- **Orbit Flow ▸ Open in Orbit Flow** — brings the selection into the app, where
+  you get every mode, your own written instructions, a cloud/on-device switch,
+  and every version kept side by side.
+
+Services rows sit one level down under **Services ▸** — macOS doesn't let any app
+add a top-level right-click item. Give the one you use a keyboard shortcut in
+**System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Services** and it becomes a
+single keystroke.
+
+If a rewrite fails, your selection is left exactly as it was. That's the opposite
+of what dictation does, on purpose: a spoken sentence you'd lose is worth
+degrading to a rule-based cleanup, but text already on your screen is not worth
+overwriting with a worse version of itself because a request timed out.
+
+The result is always copied to your clipboard as well, because a selection in a
+web page or a PDF can't be replaced and macOS gives no way to know that in
+advance.
+
+---
+
 ## Not built yet
 
-1. **LLM cleanup tier.** `RuleBasedFormatter` strips fillers, fixes spacing, capitalizes
-   sentences and adds terminal punctuation — genuinely useful, entirely deterministic. The
-   real win is a second `TextFormatter` backed by Apple's on-device Foundation Models
-   (macOS 26) for tone, list formatting, and honoring spoken corrections, with Claude as an
-   optional higher-quality tier.
-2. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
+1. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
    Needs AX read of `kAXSelectedTextAttribute` plus an LLM round-trip.
-3. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
+2. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
    supports this through `AnalysisContext` / `SFCustomLanguageModelData`.
-4. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
+3. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
    real palette, HUD motion design, onboarding.
-5. **Onboarding.** A first-run window that walks through both permissions instead of
+4. **Onboarding.** A first-run window that walks through both permissions instead of
    relying on the menu's "Grant…" items.
-6. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
+5. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
    distributable.
 
 ---

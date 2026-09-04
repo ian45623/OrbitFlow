@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowAIRewrite
 import AVFoundation
 import AppKit
 import Foundation
@@ -54,6 +55,29 @@ final class DictationController {
     /// works, the key picker offers choices, and holding the key just does nothing.
     private(set) var isHotkeyArmed = false
 
+    /// True while a cloud round-trip is in flight, so the HUD can say "Rewriting…"
+    /// instead of showing a resolved-but-frozen transcript for up to eight seconds.
+    private(set) var isRewriting = false
+
+    /// A transient message for the pill, shown when no dictation is running.
+    ///
+    /// The on-demand rewrite's only way to speak. It must not steal focus — the user is
+    /// mid-edit in another app and a panel that activates would move their cursor — and the
+    /// HUD is already a non-activating panel, so it is the one surface that qualifies.
+    private(set) var notice: String?
+
+    /// Whether the pill needs full width right now regardless of the Compact setting.
+    ///
+    /// A notice — a refusal, a failure, "also copied to clipboard" — is the on-demand
+    /// path's only feedback channel, and Compact's 104×26 was sized for a waveform, not a
+    /// sentence. `HUDView` (the label) and `HUDPanel` (the window's actual size) both read
+    /// this, so the two can never disagree about how big the pill is.
+    var needsFullHUD: Bool {
+        if notice != nil { return true }
+        if case .idle = state, isRewriting { return true }
+        return false
+    }
+
     private let hotkey = HotkeyMonitor()
     private let capture = AudioCapture()
     private let makeEngine: @Sendable () -> any TranscriptionEngine
@@ -61,12 +85,27 @@ final class DictationController {
     /// Injected only by tests; production reads the setting per-utterance below.
     private let formatter: (any TextFormatter)?
 
-    /// Chosen per-utterance so the menu toggle applies to the very next hold.
+    /// Chosen per-utterance so a tier or mode change applies to the very next hold.
     private var activeFormatter: any TextFormatter {
         if let formatter { return formatter }
-        return Settings.shared.smartCleanup
-            ? FoundationModelFormatter()
-            : RuleBasedFormatter()
+        let settings = Settings.shared
+        // Cloud during dictation is exactly `.always`, and nothing else. Reading the
+        // setting that owns that decision — rather than inferring it from the tier —
+        // is what makes it impossible for `onDemand` to leak an utterance.
+        guard settings.aiRewriteUse.rewritesDictation else {
+            switch settings.cleanupTier {
+            case .rules: return RuleBasedFormatter()
+            case .onDevice: return FoundationModelFormatter()
+            }
+        }
+        // Read on the main actor, here, because CloudFormatter's format() is not
+        // main-actor isolated and Settings is.
+        return CloudFormatter(
+            provider: settings.aiProvider,
+            model: settings.aiModel,
+            key: Keychain.read(account: settings.aiProvider.rawValue) ?? "",
+            mode: settings.rewriteMode
+        )
     }
 
     private var engine: (any TranscriptionEngine)?
@@ -97,6 +136,10 @@ final class DictationController {
     /// paste. So the tail re-checks this token before it writes anything, and discarding
     /// simply issues a new one.
     private var runToken = UUID()
+
+    /// Identifies the notice currently on screen, so `flash` can tell "my message is
+    /// still showing" from "a message with identical text showed up after mine."
+    private var noticeToken = UUID()
 
     private var holdStarted: Date?
     private var releasedAt: Date?
@@ -211,6 +254,31 @@ final class DictationController {
         guard state.isActive else { return }
         runToken = UUID()
         cancelDictation()
+    }
+
+    /// Shows `message` in the pill for three seconds.
+    ///
+    /// The token check matters: two rewrites in quick succession would otherwise have the
+    /// first one's timer clear the second one's message three seconds early — including
+    /// two identical messages in a row, which is why this compares a token and not the
+    /// text.
+    func flash(_ message: String) {
+        notice = message
+        noticeToken = UUID()
+        let token = noticeToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if noticeToken == token { notice = nil }
+        }
+    }
+
+    /// Clears any notice and shows or hides "Rewriting…" for an on-demand run.
+    ///
+    /// Separate from the private `isRewriting` writes in `endDictation`, which are gated on
+    /// the dictation run token and must stay that way.
+    func setRewriting(_ running: Bool) {
+        if running { notice = nil }
+        isRewriting = running
     }
 
     // MARK: - Dictation
@@ -344,9 +412,24 @@ final class DictationController {
                 return
             }
 
+            // Only the cloud rewrite triggered by Always is slow enough to need saying
+            // out loud; rules are instant and the on-device pass is bounded at four
+            // seconds.
+            //
+            // Both writes are gated on the run token. Discarding does not cancel the tail
+            // — it issues a new token and lets the in-flight work finish, suppressing only
+            // the paste. So a discarded utterance's cloud call can return *after* the user
+            // has started a new dictation, and an ungated reset would clear the flag out
+            // from under the live run: the HUD would stop saying "Rewriting…" while it is
+            // still, in fact, rewriting.
+            if token == runToken {
+                isRewriting = Settings.shared.cleanupEnabled
+                    && Settings.shared.aiRewriteUse.rewritesDictation
+            }
             let cleaned = Settings.shared.cleanupEnabled
                 ? await activeFormatter.format(raw)
                 : raw
+            if token == runToken { isRewriting = false }
 
             // The dictionary runs last, and runs regardless of the cleanup setting. Biasing
             // only raises the odds of the right word; this is the pass that guarantees it,
@@ -360,7 +443,14 @@ final class DictationController {
             // both awaits, so the discard button may have been pressed since the guard above.
             guard token == runToken else { return }
 
-            recordRun(text: output, corrections: corrections)
+            // `cleaned != raw` is the only honest test for "the rewrite did something":
+            // the tier can be off, and a cloud call can fail and fall back to the raw text.
+            recordRun(
+                text: output,
+                corrections: corrections,
+                original: cleaned == raw ? nil : raw,
+                draft: cleaned == raw ? nil : draftRecord(source: raw, text: cleaned)
+            )
             TextInjector.insert(output)
             if Settings.shared.soundEnabled { NSSound(named: "Pop")?.play() }
 
@@ -490,7 +580,35 @@ final class DictationController {
     /// `processSeconds` is measured from key release, not from capture start — that's the
     /// wait the user actually experiences, and it's the only number on which a streaming
     /// engine and a batch engine can be compared honestly.
-    private func recordRun(text: String, corrections: [AppliedCorrection] = []) {
+    /// The dictation-time rewrite, described the way the detail page describes the ones
+    /// run by hand — so the stack there starts with what actually produced the text that
+    /// got pasted, rather than an unlabelled first entry.
+    private func draftRecord(source: String, text: String) -> Rewrite {
+        let settings = Settings.shared
+        let instruction: String
+        let engine: String
+        if settings.aiRewriteUse.rewritesDictation {
+            instruction = settings.rewriteMode.displayName
+            engine = "\(settings.aiProvider.displayName) · \(settings.aiModel)"
+        } else {
+            instruction = "Cleanup"
+            engine = settings.cleanupTier == .onDevice ? "Apple on-device" : "Rules"
+        }
+        return Rewrite(
+            date: Date(),
+            instruction: instruction,
+            engine: engine,
+            source: source,
+            text: text
+        )
+    }
+
+    private func recordRun(
+        text: String,
+        corrections: [AppliedCorrection] = [],
+        original: String? = nil,
+        draft: Rewrite? = nil
+    ) {
         guard let holdStarted, let releasedAt else { return }
         RunLog.record(
             DictationRun(
@@ -499,7 +617,9 @@ final class DictationController {
                 audioSeconds: releasedAt.timeIntervalSince(holdStarted),
                 processSeconds: Date().timeIntervalSince(releasedAt),
                 text: text,
-                corrections: corrections.isEmpty ? nil : corrections
+                corrections: corrections.isEmpty ? nil : corrections,
+                original: original,
+                rewrites: draft.map { [$0] }
             )
         )
         self.holdStarted = nil

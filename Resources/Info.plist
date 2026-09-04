@@ -47,5 +47,65 @@
 	<string>Orbit Flow listens while you hold the push-to-talk key so it can turn your speech into text.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Orbit Flow transcribes your speech on-device to insert text where you're typing.</string>
+	<!-- Right-click ▸ Services. The `/` in a menu item's `default` places it in a
+	     submenu — Mail ships `Mail/New Email With Selection` the same way. A submenu
+	     parent is not clickable in AppKit, which is why the default action is its own
+	     top-level row above the submenu rather than the submenu's title.
+
+	     No NSReturnTypes anywhere on purpose: a provider method is synchronous and the
+	     system reads the reply pasteboard the moment it returns, so a cloud round trip
+	     could only be answered by blocking the main thread. The result goes back through
+	     TextInjector instead. See Sources/OrbitFlow/Core/RewriteService.swift. -->
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Rewrite with Orbit Flow</string></dict>
+			<key>NSMessage</key><string>rewriteDefault</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Orbit Flow/Faithful</string></dict>
+			<key>NSMessage</key><string>rewriteFaithful</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Orbit Flow/Casual</string></dict>
+			<key>NSMessage</key><string>rewriteCasual</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Orbit Flow/Professional</string></dict>
+			<key>NSMessage</key><string>rewriteProfessional</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Orbit Flow/Problem-solver</string></dict>
+			<key>NSMessage</key><string>rewriteProblemSolver</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict><key>default</key><string>Orbit Flow/Open in Orbit Flow</string></dict>
+			<key>NSMessage</key><string>openSelection</string>
+			<key>NSPortName</key><string>Orbit Flow</string>
+			<key>NSSendTypes</key>
+			<array><string>public.utf8-plain-text</string></array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -18,10 +18,20 @@ let package = Package(
             path: "Sources/OrbitFlowDictionary",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The rewrite tier is its own target for the same reason OrbitFlowDictionary is:
+        // an executable target cannot be imported by a test target, and every decision
+        // in here — the two wire dialects, the mode prompts, the output guard — is
+        // logic worth testing without a network or a running app.
+        .target(
+            name: "OrbitFlowAIRewrite",
+            path: "Sources/OrbitFlowAIRewrite",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
                 "OrbitFlowDictionary",
+                "OrbitFlowAIRewrite",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -34,6 +44,12 @@ let package = Package(
             dependencies: ["OrbitFlowDictionary"],
             path: "Tests/OrbitFlowDictionaryTests",
             resources: [.copy("dictionary-test-vectors.json")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowAIRewriteTests",
+            dependencies: ["OrbitFlowAIRewrite"],
+            path: "Tests/OrbitFlowAIRewriteTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

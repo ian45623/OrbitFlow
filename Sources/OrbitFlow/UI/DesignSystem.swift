@@ -57,8 +57,9 @@ enum DS {
         // The floating pill. Always dark, in both appearances — it sits over other
         // people's windows, and a HUD that follows the system theme reads as part of
         // whatever is behind it rather than as Orbit Flow.
-        /// The pill's body. Dark and slightly translucent, over a blur.
-        static let hudSurface = swatch(0x14161A, opacity: 0.88)
+        /// The pill's body. Near-solid dark — no material behind it, because a blur
+        /// picks up the wallpaper and haloes the capsule's edge.
+        static let hudSurface = swatch(0x14161A, opacity: 0.96)
         /// A light hairline, so a dark pill still has an edge on a dark background.
         static let hudEdge = SwiftUI.Color.white.opacity(0.16)
         /// Text on the pill.
@@ -187,8 +188,9 @@ enum DS {
     enum Shadow {
         /// A sheet above the window.
         static let sheet = Spec(color: .black.opacity(0.22), radius: 28, y: 10)
-        /// The HUD above someone else's app.
-        static let hud = Spec(color: .black.opacity(0.30), radius: 24, y: 10)
+        /// The HUD above someone else's app. Deliberately tight: a wide soft shadow
+        /// around a 26pt pill reads as a glow, not as depth.
+        static let hud = Spec(color: .black.opacity(0.28), radius: 6, y: 2)
 
         struct Spec {
             let color: SwiftUI.Color

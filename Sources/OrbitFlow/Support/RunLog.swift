@@ -1,6 +1,24 @@
 import OrbitFlowDictionary
 import Foundation
 
+/// One rewrite of a transcription, kept so the detail page can stack them.
+///
+/// Persisted rather than held in the view: a rewrite costs a round-trip and sometimes
+/// money, and losing every variant by clicking Back would make the page useless for
+/// comparing them. `instruction` and `engine` are recorded because a stack of texts with
+/// no note of what produced each one is unreadable a day later.
+struct Rewrite: Codable, Sendable, Identifiable, Hashable {
+    var id = UUID()
+    let date: Date
+    /// The mode's name, or the instruction the user typed.
+    let instruction: String
+    /// What produced it — "Anthropic · claude-sonnet-4-5", or "Apple on-device".
+    let engine: String
+    /// The text this ran on, which may be a corrected original rather than what was said.
+    let source: String
+    let text: String
+}
+
 /// One completed dictation.
 struct DictationRun: Codable, Sendable, Identifiable {
     /// Stable identity, so a single run can be deleted without matching on its text.
@@ -16,7 +34,7 @@ struct DictationRun: Codable, Sendable, Identifiable {
     let audioSeconds: Double
     /// Release → final text ready. This is the latency you actually feel.
     let processSeconds: Double
-    let text: String
+    var text: String
     /// Shared by every engine that processed the same recording, so the dashboard can
     /// present them as one side-by-side comparison instead of unrelated rows.
     var group: String?
@@ -27,6 +45,16 @@ struct DictationRun: Codable, Sendable, Identifiable {
     /// Optional for backwards compatibility: runs recorded before the dictionary existed
     /// decode with this nil rather than failing the whole line.
     var corrections: [AppliedCorrection]?
+
+    /// Every rewrite run against this transcription, oldest first — including the one
+    /// made at dictation time. Optional for the same backwards-compatibility reason as
+    /// `corrections`.
+    var rewrites: [Rewrite]?
+
+    /// The transcript as the engine heard it, kept only when cleanup actually changed it,
+    /// so history can show the rewrite next to what was really said. Optional for the same
+    /// backwards-compatibility reason as `corrections`.
+    var original: String?
 
     var realtimeFactor: Double { audioSeconds / max(processSeconds, 0.0001) }
     var characters: Int { text.count }
@@ -39,7 +67,9 @@ struct DictationRun: Codable, Sendable, Identifiable {
         processSeconds: Double,
         text: String,
         group: String? = nil,
-        corrections: [AppliedCorrection]? = nil
+        corrections: [AppliedCorrection]? = nil,
+        original: String? = nil,
+        rewrites: [Rewrite]? = nil
     ) {
         self.id = id
         self.date = date
@@ -49,6 +79,8 @@ struct DictationRun: Codable, Sendable, Identifiable {
         self.text = text
         self.group = group
         self.corrections = corrections
+        self.original = original
+        self.rewrites = rewrites
     }
 
     init(from decoder: any Decoder) throws {
@@ -61,6 +93,8 @@ struct DictationRun: Codable, Sendable, Identifiable {
         text = try container.decode(String.self, forKey: .text)
         group = try container.decodeIfPresent(String.self, forKey: .group)
         corrections = try container.decodeIfPresent([AppliedCorrection].self, forKey: .corrections)
+        original = try container.decodeIfPresent(String.self, forKey: .original)
+        rewrites = try container.decodeIfPresent([Rewrite].self, forKey: .rewrites)
     }
 }
 
@@ -124,6 +158,18 @@ enum RunLog {
             compareMode: Settings.shared.compareMode,
             key: Settings.shared.pushToTalkKey.displayName
         ).write(to: dashboardURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Changes one run in place, on the stored copy rather than on the caller's.
+    ///
+    /// Read-modify-write of the file, deliberately: a detail page holds a snapshot, and
+    /// four rewrites finishing at four different times would each write back a copy that
+    /// predates the other three.
+    static func modify(_ id: UUID, _ change: (inout DictationRun) -> Void) {
+        var runs = load()
+        guard let index = runs.firstIndex(where: { $0.id == id }) else { return }
+        change(&runs[index])
+        rewrite(runs)
     }
 
     /// Deletes one run.
