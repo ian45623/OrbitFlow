@@ -2,7 +2,19 @@
 
 **Date:** 2026-09-04
 **Scope:** macOS app only.
-**Status:** approved design, not yet implemented.
+**Status:** implemented.
+
+**Implementation notes:** three departures from this design, all deliberate.
+(1) `AIRewriteUse` and the engine rule live in `OrbitFlowAIRewrite`, not the app
+target — §7 asked for testable free functions, and the app target is an
+executable that no test target can import. (2) §2's "tier dance" was replaced by
+deleting `CleanupTier.cloud` and `tierBeforeCloud` outright: two properties able
+to disagree about whether text leaves the Mac is a drift bug waiting to happen,
+and a one-time migration removes the possibility instead of managing it.
+(3) §4's "user notification" is the HUD pill, not `UNUserNotificationCenter` —
+the HUD is already non-activating, which the notification centre is not required
+to be, and it costs no new permission prompt.
+
 **Follows:** `2026-09-04-ai-rewrite-design.md`, which built the always-on tier this splits.
 
 ---
