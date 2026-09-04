@@ -1,4 +1,5 @@
 import SwiftUI
+import OrbitFlowAIRewrite
 
 /// The settings content, shared by the Settings tab in the main window and the standard
 /// ⌘, window. One view rather than two, so the two can never drift apart.
@@ -8,6 +9,19 @@ import SwiftUI
 struct SettingsPanel: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
+
+    /// Typed into, then saved to the Keychain and cleared. Never populated *from* the
+    /// Keychain — the UI shows that a key exists, not what it is.
+    @State private var keyDraft = ""
+    @State private var hasStoredKey = false
+    @State private var isTesting = false
+    @State private var testResult: TestResult?
+    @State private var availableModels: [String] = []
+
+    private enum TestResult: Equatable {
+        case success(count: Int)
+        case failure(String)
+    }
 
     /// Settings read as a column, not a page. Capped so the tab in an 860pt window and the
     /// 520pt ⌘, window lay out identically instead of one stretching into a banner.
@@ -76,6 +90,47 @@ struct SettingsPanel: View {
                     .toggleStyle(.switch)
                     note("Strips fillers and fixes spacing and punctuation. Dictionary corrections "
                         + "run either way.")
+
+                    Hairline()
+
+                    Toggle(isOn: aiRewriteBinding) {
+                        Text("AI rewrite")
+                            .font(DS.Font.body)
+                            .foregroundStyle(hasStoredKey ? DS.Color.ink : DS.Color.inkFaint)
+                    }
+                    .toggleStyle(.switch)
+                    .disabled(!hasStoredKey)
+
+                    if hasStoredKey {
+                        // Say plainly what turning this on does. The app's whole pitch is
+                        // that it runs on your Mac; this is the one feature that doesn't.
+                        note("Sends each transcript to \(settings.aiProvider.displayName) to be "
+                            + "rewritten. Your text leaves this Mac.")
+                    } else {
+                        note("Save an API key below to turn this on. Without one, every "
+                            + "dictation would silently fall back to the rule-based pass.")
+                    }
+
+                    providerControls
+
+                    if settings.cleanupTier == .cloud {
+                        Hairline()
+                        FieldLabel(text: "Mode", color: DS.Color.ink, emphasis: true)
+                        Segmented(
+                            options: RewriteMode.allCases.map { ($0, $0.displayName) },
+                            selection: $settings.rewriteMode
+                        )
+                        note(settings.rewriteMode.summary)
+                    }
+                }
+                .onAppear { refreshKeyPresence() }
+                .onChange(of: settings.aiProvider) {
+                    // Each provider has its own key and its own model list.
+                    availableModels = []
+                    testResult = nil
+                    keyDraft = ""
+                    settings.aiModel = settings.aiProvider.defaultModel
+                    refreshKeyPresence()
                 }
 
                 group("When you close the window") {
@@ -120,6 +175,179 @@ struct SettingsPanel: View {
         .padding(DS.Space.base)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+    }
+
+    /// The AI rewrite switch is a view over `cleanupTier`, not a second stored flag —
+    /// one source of truth. Turning it off restores whatever tier was in use before.
+    private var aiRewriteBinding: Binding<Bool> {
+        Binding(
+            get: { settings.cleanupTier == .cloud },
+            set: { isOn in
+                if isOn {
+                    if settings.cleanupTier != .cloud {
+                        settings.tierBeforeCloud = settings.cleanupTier
+                    }
+                    settings.cleanupTier = .cloud
+                } else {
+                    settings.cleanupTier = settings.tierBeforeCloud
+                }
+            }
+        )
+    }
+
+    private func refreshKeyPresence() {
+        hasStoredKey = Keychain.hasKey(account: settings.aiProvider.rawValue)
+    }
+
+    private func saveKey() {
+        let key = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        _ = Keychain.save(key, account: settings.aiProvider.rawValue)
+        keyDraft = ""
+        testResult = nil
+        refreshKeyPresence()
+    }
+
+    private func removeKey() {
+        Keychain.delete(account: settings.aiProvider.rawValue)
+        keyDraft = ""
+        testResult = nil
+        availableModels = []
+        refreshKeyPresence()
+        // A tier with no key falls back on every utterance. Don't leave it armed.
+        if settings.cleanupTier == .cloud { settings.cleanupTier = settings.tierBeforeCloud }
+    }
+
+    /// Fetches the provider's model list. This is the only place a key problem is
+    /// legible — everywhere else it degrades quietly to the rule pass.
+    private func runTest() {
+        guard let key = Keychain.read(account: settings.aiProvider.rawValue), !key.isEmpty else {
+            testResult = .failure("Save an API key first.")
+            return
+        }
+        let provider = settings.aiProvider
+        isTesting = true
+        testResult = nil
+        Task {
+            do {
+                let ids = try await CloudRewriter(provider: provider, key: key).models()
+                availableModels = ids
+                if settings.aiModel.isEmpty {
+                    settings.aiModel = provider.defaultModel.isEmpty
+                        ? (ids.first ?? "")
+                        : provider.defaultModel
+                }
+                testResult = .success(count: ids.count)
+            } catch let failure as RewriteFailure {
+                testResult = .failure(failure.summary)
+            } catch {
+                testResult = .failure(error.localizedDescription)
+            }
+            isTesting = false
+        }
+    }
+
+    /// Provider, key, and model. Always visible — the key has to be enterable *before*
+    /// the toggle it unlocks can be switched on.
+    @ViewBuilder
+    private var providerControls: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
+            FieldLabel(text: "Provider", color: DS.Color.ink, emphasis: true)
+            Segmented(
+                options: AIProvider.allCases.map { ($0, $0.displayName) },
+                selection: $settings.aiProvider
+            )
+
+            VStack(alignment: .leading, spacing: DS.Space.tight) {
+                FieldLabel(text: "API key")
+                HStack(spacing: DS.Space.snug) {
+                    SecureField("Paste your key", text: $keyDraft)
+                        .textFieldStyle(.plain)
+                        .font(DS.Font.body)
+                        .foregroundStyle(DS.Color.ink)
+                        .padding(.horizontal, DS.Space.base)
+                        .padding(.vertical, DS.Space.snug)
+                        .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DS.Radius.control)
+                                .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+                        )
+                    ActionButton(title: "Save") { saveKey() }
+                        .disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    ActionButton(title: isTesting ? "Testing…" : "Test", kind: .secondary) {
+                        runTest()
+                    }
+                    .disabled(isTesting || !hasStoredKey)
+                }
+
+                HStack(spacing: DS.Space.snug) {
+                    if hasStoredKey {
+                        StatusDot(color: DS.Color.positive, isOn: true)
+                        Text("A key is saved for \(settings.aiProvider.displayName).")
+                            .font(DS.Font.caption)
+                            .foregroundStyle(DS.Color.inkMuted)
+                        ActionButton(title: "Remove", kind: .quiet) { removeKey() }
+                    } else {
+                        Link("Get a \(settings.aiProvider.displayName) key ↗",
+                             destination: settings.aiProvider.keyURL)
+                            .font(DS.Font.caption)
+                            .foregroundStyle(DS.Color.inkMuted)
+                    }
+                }
+
+                if let testResult { resultRow(testResult) }
+            }
+
+            VStack(alignment: .leading, spacing: DS.Space.tight) {
+                FieldLabel(text: "Model")
+                if availableModels.isEmpty {
+                    TextField(
+                        settings.aiProvider.defaultModel.isEmpty
+                            ? "Press Test to load models"
+                            : settings.aiProvider.defaultModel,
+                        text: $settings.aiModel
+                    )
+                    .textFieldStyle(.plain)
+                    .font(DS.Font.body)
+                    .foregroundStyle(DS.Color.ink)
+                    .padding(.horizontal, DS.Space.base)
+                    .padding(.vertical, DS.Space.snug)
+                    .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DS.Radius.control)
+                            .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+                    )
+                } else {
+                    // A picker over what the provider actually serves, plus free text —
+                    // a provider may serve a model our parsing missed, and the user
+                    // shouldn't be blocked on that.
+                    Picker("", selection: $settings.aiModel) {
+                        ForEach(availableModels, id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func resultRow(_ result: TestResult) -> some View {
+        HStack(alignment: .top, spacing: DS.Space.snug) {
+            switch result {
+            case .success(let count):
+                StatusDot(color: DS.Color.positive, isOn: true)
+                Text("Connected. \(count) model\(count == 1 ? "" : "s") available.")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkMuted)
+            case .failure(let message):
+                StatusDot(color: DS.Color.signal, isOn: true)
+                // The provider's own words. A bad key should read as a bad key.
+                Text(message)
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func group<Content: View>(
