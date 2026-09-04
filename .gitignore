@@ -1,0 +1,13 @@
+# macOS build
+.build/
+*.xcuserdatad
+.DS_Store
+
+# Built .app bundles, at the repo root ONLY.
+/*.app/
+
+# Local ASR model weights. Large, redistributed under their own license, and
+# fetched on first use rather than committed.
+models/
+*.onnx
+*.nemo
