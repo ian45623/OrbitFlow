@@ -70,21 +70,23 @@ final class DictationController {
     private var activeFormatter: any TextFormatter {
         if let formatter { return formatter }
         let settings = Settings.shared
-        switch settings.cleanupTier {
-        case .rules:
-            return RuleBasedFormatter()
-        case .onDevice:
-            return FoundationModelFormatter()
-        case .cloud:
-            // Read on the main actor, here, because CloudFormatter's format() is not
-            // main-actor isolated and Settings is.
-            return CloudFormatter(
-                provider: settings.aiProvider,
-                model: settings.aiModel,
-                key: Keychain.read(account: settings.aiProvider.rawValue) ?? "",
-                mode: settings.rewriteMode
-            )
+        // Cloud during dictation is exactly `.always`, and nothing else. Reading the
+        // setting that owns that decision — rather than inferring it from the tier —
+        // is what makes it impossible for `onDemand` to leak an utterance.
+        guard settings.aiRewriteUse.rewritesDictation else {
+            switch settings.cleanupTier {
+            case .rules: return RuleBasedFormatter()
+            case .onDevice: return FoundationModelFormatter()
+            }
         }
+        // Read on the main actor, here, because CloudFormatter's format() is not
+        // main-actor isolated and Settings is.
+        return CloudFormatter(
+            provider: settings.aiProvider,
+            model: settings.aiModel,
+            key: Keychain.read(account: settings.aiProvider.rawValue) ?? "",
+            mode: settings.rewriteMode
+        )
     }
 
     private var engine: (any TranscriptionEngine)?
@@ -373,7 +375,7 @@ final class DictationController {
             // still, in fact, rewriting.
             if token == runToken {
                 isRewriting = Settings.shared.cleanupEnabled
-                    && Settings.shared.cleanupTier == .cloud
+                    && Settings.shared.aiRewriteUse.rewritesDictation
             }
             let cleaned = Settings.shared.cleanupEnabled
                 ? await activeFormatter.format(raw)
@@ -536,16 +538,12 @@ final class DictationController {
         let settings = Settings.shared
         let instruction: String
         let engine: String
-        switch settings.cleanupTier {
-        case .cloud:
+        if settings.aiRewriteUse.rewritesDictation {
             instruction = settings.rewriteMode.displayName
             engine = "\(settings.aiProvider.displayName) · \(settings.aiModel)"
-        case .onDevice:
+        } else {
             instruction = "Cleanup"
-            engine = "Apple on-device"
-        case .rules:
-            instruction = "Cleanup"
-            engine = "Rules"
+            engine = settings.cleanupTier == .onDevice ? "Apple on-device" : "Rules"
         }
         return Rewrite(
             date: Date(),

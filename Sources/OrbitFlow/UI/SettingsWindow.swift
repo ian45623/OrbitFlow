@@ -106,45 +106,43 @@ struct SettingsPanel: View {
 
                     Hairline()
 
-                    Toggle(isOn: aiRewriteBinding) {
-                        Text("AI rewrite")
-                            .font(DS.Font.body)
-                            .foregroundStyle(
-                                hasStoredKey && !settings.aiModel.isEmpty
-                                    ? DS.Color.ink : DS.Color.inkFaint
-                            )
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(!hasStoredKey || settings.aiModel.isEmpty)
+                    FieldLabel(text: "AI rewrite", color: DS.Color.ink, emphasis: true)
+                    Segmented(
+                        options: AIRewriteUse.allCases.map { ($0, $0.displayName) },
+                        selection: Binding(
+                            get: { settings.aiRewriteUse },
+                            // Always without a key rewrites nothing and falls back on every
+                            // single utterance, which looks like the feature is broken
+                            // rather than unconfigured.
+                            set: { settings.aiRewriteUse = ($0 == .always && !canUseCloud) ? .onDemand : $0 }
+                        )
+                    )
+                    note(settings.aiRewriteUse.summary)
 
-                    if hasStoredKey, !settings.aiModel.isEmpty {
-                        // Say plainly what turning this on does. The app's whole pitch is
-                        // that it runs on your Mac; this is the one feature that doesn't.
-                        note("Sends each transcript to \(settings.aiProvider.displayName) to be "
-                            + "rewritten. Your text leaves this Mac.")
-                    } else if !hasStoredKey {
-                        note("Save an API key below to turn this on. Without one, every "
-                            + "dictation would silently fall back to the rule-based pass.")
-                    } else {
-                        note("Press Test to pick a model. Without one, every dictation "
-                            + "would silently fall back to the rule-based pass.")
+                    if settings.aiRewriteUse != .off, !canUseCloud {
+                        note(hasStoredKey
+                            ? "Press Test below to pick a model. Until then, rewrites use Apple's "
+                                + "on-device model."
+                            : "Save an API key below to use \(settings.aiProvider.displayName). Until "
+                                + "then, rewrites use Apple's on-device model.")
                     }
 
-                    if settings.cleanupTier == .cloud, !settings.cleanupEnabled {
-                        note("\"Clean up transcripts\" is off, so nothing is being rewritten "
-                            + "right now. Turn it back on to use AI rewrite.")
+                    if settings.aiRewriteUse == .always, !settings.cleanupEnabled {
+                        note("\"Clean up transcripts\" is off, so dictation isn't being rewritten right "
+                            + "now. The right-click rows still work.")
                     }
 
                     providerControls
 
-                    if settings.cleanupTier == .cloud {
+                    if settings.aiRewriteUse != .off {
                         Hairline()
                         FieldLabel(text: "Mode", color: DS.Color.ink, emphasis: true)
                         Segmented(
                             options: RewriteMode.allCases.map { ($0, $0.displayName) },
                             selection: $settings.rewriteMode
                         )
-                        note(settings.rewriteMode.summary)
+                        note(settings.rewriteMode.summary
+                            + " Also the mode used by right-click ▸ Services ▸ Rewrite with Orbit Flow.")
                     }
                 }
                 .onAppear { refreshKeyPresence() }
@@ -155,12 +153,9 @@ struct SettingsPanel: View {
                     keyDraft = ""
                     settings.aiModel = settings.aiProvider.defaultModel
                     refreshKeyPresence()
-                    // Same reasoning as removeKey: a cloud tier with no key for the
-                    // selected provider falls back on every single utterance, so don't
-                    // leave it armed just because it was armed for the previous one.
-                    if settings.cleanupTier == .cloud, !hasStoredKey {
-                        settings.cleanupTier = settings.tierBeforeCloud
-                    }
+                    // A cloud rewrite with no key for this provider falls back on every call. Don't
+                    // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
+                    if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
                 }
 
                 group("Launch at login") {
@@ -352,23 +347,9 @@ struct SettingsPanel: View {
         )
     }
 
-    /// The AI rewrite switch is a view over `cleanupTier`, not a second stored flag —
-    /// one source of truth. Turning it off restores whatever tier was in use before.
-    private var aiRewriteBinding: Binding<Bool> {
-        Binding(
-            get: { settings.cleanupTier == .cloud },
-            set: { isOn in
-                if isOn {
-                    if settings.cleanupTier != .cloud {
-                        settings.tierBeforeCloud = settings.cleanupTier
-                    }
-                    settings.cleanupTier = .cloud
-                } else {
-                    settings.cleanupTier = settings.tierBeforeCloud
-                }
-            }
-        )
-    }
+    /// A cloud rewrite needs both halves. Either one missing means every call would
+    /// fall back, so the UI must not present it as configured.
+    private var canUseCloud: Bool { hasStoredKey && !settings.aiModel.isEmpty }
 
     private func refreshKeyPresence() {
         hasStoredKey = Keychain.hasKey(account: settings.aiProvider.rawValue)
@@ -396,8 +377,9 @@ struct SettingsPanel: View {
         testResult = nil
         availableModels = []
         refreshKeyPresence()
-        // A tier with no key falls back on every utterance. Don't leave it armed.
-        if settings.cleanupTier == .cloud { settings.cleanupTier = settings.tierBeforeCloud }
+        // A cloud rewrite with no key for this provider falls back on every call. Don't
+        // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
+        if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
     }
 
     /// Fetches the provider's model list. This is the only place a key problem is

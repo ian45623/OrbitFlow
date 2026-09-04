@@ -18,23 +18,21 @@ enum SpeechEngineChoice: String, CaseIterable, Sendable {
     var showsLiveText: Bool { self == .apple }
 }
 
-/// Which pass cleans a transcript before it's injected.
+/// Which *local* pass cleans a transcript before it's injected.
 ///
-/// Replaces the old `smartCleanup` boolean, which could only express two of these three.
+/// No longer expresses the cloud: `AIRewriteUse` owns that decision now, and having two
+/// properties able to disagree about whether text leaves the Mac is not a risk worth
+/// carrying. The `cloud` case that used to live here is migrated away in `init`.
 enum CleanupTier: String, CaseIterable, Sendable {
     /// Deterministic, zero-latency, always available.
     case rules
     /// Apple's on-device Foundation Model. Nothing leaves the Mac.
     case onDevice
-    /// A cloud provider of the user's choosing. Text leaves the Mac — see the note in
-    /// Settings and the privacy section of the README.
-    case cloud
 
     var displayName: String {
         switch self {
         case .rules: "Rules"
         case .onDevice: "On-device"
-        case .cloud: "Cloud AI"
         }
     }
 }
@@ -110,12 +108,10 @@ final class Settings {
         didSet { defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier) }
     }
 
-    /// The tier to return to when the AI rewrite switch is turned off.
-    ///
-    /// Without this, switching the cloud tier off would silently demote a user who had
-    /// chosen on-device cleanup all the way down to rules.
-    var tierBeforeCloud: CleanupTier {
-        didSet { defaults.set(tierBeforeCloud.rawValue, forKey: Keys.tierBeforeCloud) }
+    /// When the AI rewrite runs: never, only when asked from the Services menu, or on
+    /// every dictation.
+    var aiRewriteUse: AIRewriteUse {
+        didSet { defaults.set(aiRewriteUse.rawValue, forKey: Keys.aiRewriteUse) }
     }
 
     /// Which cloud provider the rewrite tier calls. The API key lives in the Keychain,
@@ -155,7 +151,10 @@ final class Settings {
         /// Read once, never written: migrated into `cleanupTier` in `init`.
         static let legacySmartCleanup = "smartCleanup"
         static let cleanupTier = "cleanupTier"
-        static let tierBeforeCloud = "tierBeforeCloud"
+        static let aiRewriteUse = "aiRewriteUse"
+        /// Read once, never written: the restore slot the old AI-rewrite toggle used,
+        /// consumed by the migration in `init`.
+        static let legacyTierBeforeCloud = "tierBeforeCloud"
         static let aiProvider = "aiProvider"
         static let aiModel = "aiModel"
         static let rewriteMode = "rewriteMode"
@@ -169,20 +168,27 @@ final class Settings {
         // Apple by default: no download, no dependency, live text while speaking.
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true
-        // Migrate the old boolean exactly once: after the first launch on this build,
-        // `cleanupTier` is present and this branch never runs again. Note that no user
-        // can land on `.cloud` by migration — that requires an explicit opt-in.
-        if let raw = defaults.string(forKey: Keys.cleanupTier),
-           let tier = CleanupTier(rawValue: raw) {
+        // `cloud` is no longer a tier. A user who had it selected was saying "rewrite every
+        // dictation", which is now `aiRewriteUse == .always`, and the tier underneath goes back
+        // to whatever the old toggle would have restored.
+        let storedTier = defaults.string(forKey: Keys.cleanupTier)
+        let tierWasCloud = storedTier == "cloud"
+
+        aiRewriteUse = AIRewriteUse.resolve(
+            stored: defaults.string(forKey: Keys.aiRewriteUse),
+            legacyTierWasCloud: tierWasCloud
+        )
+
+        if tierWasCloud {
+            cleanupTier = CleanupTier(
+                rawValue: defaults.string(forKey: Keys.legacyTierBeforeCloud) ?? ""
+            ) ?? .rules
+        } else if let storedTier, let tier = CleanupTier(rawValue: storedTier) {
             cleanupTier = tier
         } else {
             let wasSmart = defaults.object(forKey: Keys.legacySmartCleanup) as? Bool ?? false
             cleanupTier = wasSmart ? .onDevice : .rules
         }
-
-        tierBeforeCloud = CleanupTier(
-            rawValue: defaults.string(forKey: Keys.tierBeforeCloud) ?? ""
-        ) ?? .rules
         // Resolved into a local first: `aiProvider` is an @Observable-backed computed
         // property, and reading it back via `self.aiProvider` here — before every stored
         // property finishes initializing — is a compile error, not just bad style.
@@ -199,5 +205,11 @@ final class Settings {
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
+
+        // `didSet` does not fire during initialization, so without these two writes the
+        // migration above would re-run on every launch and a legacy `cloud` string would
+        // sit in defaults forever.
+        defaults.set(aiRewriteUse.rawValue, forKey: Keys.aiRewriteUse)
+        defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier)
     }
 }

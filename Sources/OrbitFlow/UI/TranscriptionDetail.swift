@@ -335,11 +335,13 @@ struct TranscriptionDetail: View {
 
     // MARK: - Running
 
+    /// Whether a cloud rewrite can run from this page.
+    ///
+    /// Deliberately not a question about dictation. Under `onDemand` the cloud is fully
+    /// configured and dictation simply doesn't use it — testing the dictation tier here
+    /// would black out cloud rewrites on the page this feature routes text into.
     private var isCloudReady: Bool {
-        settings.cleanupEnabled
-            && settings.cleanupTier == .cloud
-            && !settings.aiModel.isEmpty
-            && hasKey
+        settings.aiRewriteUse.servesOnDemand && !settings.aiModel.isEmpty && hasKey
     }
 
     private var canRun: Bool {
@@ -354,7 +356,7 @@ struct TranscriptionDetail: View {
         if OnDeviceRewriter.isAvailable {
             return "Cloud rewrite isn't set up. Switch to on-device, or add a key in Settings."
         }
-        return "Turn on AI rewrite in Settings, with a key and a model, to rewrite from here."
+        return "Set AI rewrite to On demand or Always in Settings, with a key and a model."
     }
 
     private var engineLabel: String {

@@ -219,9 +219,10 @@ private struct MenuContent: View {
             }
         }
 
-        // Only meaningful when the cloud tier is on; hidden otherwise rather than shown
-        // disabled, because a mode that changes nothing is worse than no mode at all.
-        if settings.cleanupTier == .cloud {
+        // Meaningful whenever a rewrite can run at all — under On demand this picker is what
+        // the default right-click row reads. Hidden when nothing can use it, because a mode
+        // that changes nothing is worse than no mode at all.
+        if settings.aiRewriteUse != .off {
             Picker("Rewrite mode", selection: $settings.rewriteMode) {
                 ForEach(RewriteMode.allCases, id: \.self) { mode in
                     Text(mode.displayName).tag(mode)
