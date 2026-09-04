@@ -40,12 +40,26 @@ final class RewriteService: NSObject {
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) { run(pboard, mode: .problemSolver) }
 
+    /// Unlike the in-place rows, this one deliberately activates the app — bringing the
+    /// window forward is the whole point of it.
     @objc func openSelection(
         _ pboard: NSPasteboard, userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>
     ) {
         guard let text = selection(from: pboard) else { return }
-        controller.flash("Open: \(text.prefix(20))…")
+
+        // The same call the "Add text" composer makes, with a different engine label so
+        // history says where this came from.
+        let run = DictationRun(
+            date: Date(),
+            engine: "Selection",
+            audioSeconds: 0,
+            processSeconds: 0,
+            text: text
+        )
+        RunLog.record(run)
+        MainRoute.shared.open(run.id)
+        AppDelegate.showMainWindow()
     }
 
     // MARK: - Shared path

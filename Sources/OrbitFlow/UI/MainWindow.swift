@@ -149,10 +149,7 @@ private struct TranscriptionList: View {
     @State private var settings = Settings.shared
     @State private var query = ""
     @State private var isConfirmingClear = false
-    /// Non-nil while one transcription is open for editing and rewriting. Held by id, not
-    /// by value: the detail page writes rewrites back as they land, and a snapshot here
-    /// would go stale the moment it did.
-    @State private var opened: UUID?
+    @State private var route = MainRoute.shared
     /// The compose box for pasted text. A flag plus a plain string, deliberately: an
     /// optional draft means the editor's binding changes identity as the box closes, and
     /// a text view whose binding is swapped out from under it while it still holds focus
@@ -169,9 +166,9 @@ private struct TranscriptionList: View {
     }
 
     var body: some View {
-        if let opened {
+        if let opened = route.openRun {
             TranscriptionDetail(runID: opened) {
-                withAnimation(DS.Motion.panel) { self.opened = nil }
+                withAnimation(DS.Motion.panel) { route.openRun = nil }
             }
         } else {
             list
@@ -209,7 +206,7 @@ private struct TranscriptionList: View {
                         ForEach(runs) { run in
                             TranscriptionRow(
                                 run: run,
-                                onOpen: { withAnimation(DS.Motion.panel) { opened = run.id } },
+                                onOpen: { withAnimation(DS.Motion.panel) { route.openRun = run.id } },
                                 onDelete: { withAnimation(DS.Motion.panel) { RunLog.delete(run) } }
                             )
                             if run.id != runs.last?.id { Hairline() }
