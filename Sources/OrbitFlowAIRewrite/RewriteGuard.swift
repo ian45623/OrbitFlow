@@ -5,6 +5,7 @@ import Foundation
 public enum Rejection: Equatable, Sendable {
     case empty
     case inventedWords([String])
+    case droppedNegation([String])
     case lengthRatio(Double)
     case preambleTell(String)
 
@@ -14,6 +15,8 @@ public enum Rejection: Equatable, Sendable {
             "empty input or output"
         case .inventedWords(let words):
             "invented words: \(words.joined(separator: ", "))"
+        case .droppedNegation(let words):
+            "dropped negation: \(words.joined(separator: ", "))"
         case .lengthRatio(let ratio):
             "length ratio \(String(format: "%.2f", ratio))"
         case .preambleTell(let tell):
@@ -70,6 +73,15 @@ public enum RewriteGuard {
         }
 
         if !mode.isRewrite {
+            // A cleanup may not quietly drop a negation. "the meeting is not canceled"
+            // becoming "The meeting is canceled." introduces no new word and lands well
+            // inside the length band, so neither check below sees it — and it inverts
+            // what the speaker said. In the mode advertised as the strictest, and used by
+            // default, that is the worst thing this guard could let through.
+            let lost = Set(originalTokens).intersection(negations)
+                .subtracting(Set(outputTokens))
+            if !lost.isEmpty { return .droppedNegation(lost.sorted()) }
+
             let vocabulary = Set(originalTokens)
             let invented = outputTokens.filter { !vocabulary.contains($0) }
             if !invented.isEmpty { return .inventedWords(Array(invented.prefix(5))) }
@@ -86,6 +98,17 @@ public enum RewriteGuard {
 
         return nil
     }
+
+    /// Words whose disappearance reverses meaning.
+    ///
+    /// Consulted for `faithful` only. A rewrite may legitimately turn "not able" into
+    /// "unable", so requiring the literal token there would reject good output — and in
+    /// faithful mode such a rephrasing is caught by the invented-words check anyway.
+    /// None of these appear in `stopWords`, so they always survive `contentWords`.
+    private static let negations: Set<String> = [
+        "not", "no", "never", "none", "nothing", "nobody", "nowhere",
+        "cannot", "neither", "nor", "without",
+    ]
 
     private static let tells = [
         "here's the cleaned", "here is the cleaned",

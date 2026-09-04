@@ -82,10 +82,44 @@ struct GuardTests {
         #expect(RewriteGuard.rejection(original: original, output: output, mode: .faithful) != nil)
     }
 
+    /// Found in review. This output introduces no new content word and sits inside the
+    /// length band, so every other check passes it — and it says the opposite of what was
+    /// dictated.
+    @Test("Faithful rejects a dropped negation that would invert the meaning")
+    func faithfulRejectsDroppedNegation() {
+        let reason = RewriteGuard.rejection(
+            original: "the meeting is not canceled",
+            output: "The meeting is canceled.",
+            mode: .faithful
+        )
+        #expect(reason == .droppedNegation(["not"]))
+    }
+
+    @Test("Faithful accepts output that keeps the negation")
+    func faithfulKeepsNegation() {
+        #expect(RewriteGuard.rejection(
+            original: "um the meeting is not canceled",
+            output: "The meeting is not canceled.",
+            mode: .faithful
+        ) == nil)
+    }
+
+    /// Why the negation check is faithful-only: "not able" to "unable" is a good
+    /// professional rewrite, and demanding the literal token would refuse it.
+    @Test("Rewrite modes are not held to the literal negation token")
+    func rewriteMayRephraseNegation() {
+        #expect(RewriteGuard.rejection(
+            original: "i am not able to make it",
+            output: "I am unable to attend.",
+            mode: .professional
+        ) == nil)
+    }
+
     @Test("Rejection summaries are non-empty so the log line says something")
     func summaries() {
         #expect(!Rejection.empty.summary.isEmpty)
         #expect(!Rejection.inventedWords(["paris"]).summary.isEmpty)
+        #expect(!Rejection.droppedNegation(["not"]).summary.isEmpty)
         #expect(!Rejection.lengthRatio(4.2).summary.isEmpty)
         #expect(!Rejection.preambleTell("sure,").summary.isEmpty)
     }
