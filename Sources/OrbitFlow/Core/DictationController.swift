@@ -392,7 +392,14 @@ final class DictationController {
             // both awaits, so the discard button may have been pressed since the guard above.
             guard token == runToken else { return }
 
-            recordRun(text: output, corrections: corrections)
+            // `cleaned != raw` is the only honest test for "the rewrite did something":
+            // the tier can be off, and a cloud call can fail and fall back to the raw text.
+            recordRun(
+                text: output,
+                corrections: corrections,
+                original: cleaned == raw ? nil : raw,
+                draft: cleaned == raw ? nil : draftRecord(source: raw, text: cleaned)
+            )
             TextInjector.insert(output)
             if Settings.shared.soundEnabled { NSSound(named: "Pop")?.play() }
 
@@ -522,7 +529,39 @@ final class DictationController {
     /// `processSeconds` is measured from key release, not from capture start — that's the
     /// wait the user actually experiences, and it's the only number on which a streaming
     /// engine and a batch engine can be compared honestly.
-    private func recordRun(text: String, corrections: [AppliedCorrection] = []) {
+    /// The dictation-time rewrite, described the way the detail page describes the ones
+    /// run by hand — so the stack there starts with what actually produced the text that
+    /// got pasted, rather than an unlabelled first entry.
+    private func draftRecord(source: String, text: String) -> Rewrite {
+        let settings = Settings.shared
+        let instruction: String
+        let engine: String
+        switch settings.cleanupTier {
+        case .cloud:
+            instruction = settings.rewriteMode.displayName
+            engine = "\(settings.aiProvider.displayName) · \(settings.aiModel)"
+        case .onDevice:
+            instruction = "Cleanup"
+            engine = "Apple on-device"
+        case .rules:
+            instruction = "Cleanup"
+            engine = "Rules"
+        }
+        return Rewrite(
+            date: Date(),
+            instruction: instruction,
+            engine: engine,
+            source: source,
+            text: text
+        )
+    }
+
+    private func recordRun(
+        text: String,
+        corrections: [AppliedCorrection] = [],
+        original: String? = nil,
+        draft: Rewrite? = nil
+    ) {
         guard let holdStarted, let releasedAt else { return }
         RunLog.record(
             DictationRun(
@@ -531,7 +570,9 @@ final class DictationController {
                 audioSeconds: releasedAt.timeIntervalSince(holdStarted),
                 processSeconds: Date().timeIntervalSince(releasedAt),
                 text: text,
-                corrections: corrections.isEmpty ? nil : corrections
+                corrections: corrections.isEmpty ? nil : corrections,
+                original: original,
+                rewrites: draft.map { [$0] }
             )
         )
         self.holdStarted = nil

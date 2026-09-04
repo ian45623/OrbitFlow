@@ -70,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud = HUDPanel(controller: controller)
 
         if !controller.activate() {
-            Permissions.promptForAccessibility()
+            // Only prompt when we're actually untrusted. A tap can fail to be created for
+            // other reasons, and showing the grant dialog to someone who already granted it
+            // is how an app earns a reputation for asking forever.
+            if !Permissions.hasAccessibility { Permissions.promptForAccessibility() }
             // The tap can only be created once the user grants Accessibility, and there's
             // no notification for that — poll until it takes.
             retryActivation()
@@ -197,28 +200,7 @@ private struct MenuContent: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
     @Environment(\.openWindow) private var openWindow
-    @State private var isPreloadingParakeet = false
-    @State private var parakeetOnDisk = ParakeetModels.isDownloaded
-
-    private var parakeetStatus: String {
-        if isPreloadingParakeet { return "Loading Parakeet models…" }
-        // Reflects what's actually on disk, not just what this menu instance has done.
-        return parakeetOnDisk ? "Parakeet models installed ✓" : "Download Parakeet models…"
-    }
-
-    private func preloadParakeet() {
-        guard !isPreloadingParakeet else { return }
-        isPreloadingParakeet = true
-        Task {
-            do {
-                _ = try await ParakeetModels.shared.manager()
-                parakeetOnDisk = ParakeetModels.isDownloaded
-            } catch {
-                Log.speech.error("Parakeet preload failed: \(error.localizedDescription)")
-            }
-            isPreloadingParakeet = false
-        }
-    }
+    @State private var parakeet = ParakeetDownload.shared
 
     var body: some View {
         Text("Hold \(settings.pushToTalkKey.displayName) to dictate")
@@ -276,10 +258,19 @@ private struct MenuContent: View {
         .keyboardShortcut("d")
 
         // Downloading ~470 MB on the first hold would look like a hang, so offer to do it
-        // deliberately instead.
-        if settings.engine == .parakeet {
-            Button(parakeetStatus) { preloadParakeet() }
-                .disabled(isPreloadingParakeet || parakeetOnDisk)
+        // deliberately instead. Silent once it's installed — a permanent "✓ installed" row
+        // is a menu item that can never do anything.
+        if settings.engine == .parakeet || settings.compareMode {
+            switch parakeet.phase {
+            case .ready:
+                EmptyView()
+            case .working(let label, let fraction):
+                Text("\(label) Parakeet… \(Int(fraction * 100))%")
+            case .missing:
+                Button("Download Parakeet model (470 MB)…") { parakeet.start() }
+            case .failed:
+                Button("Parakeet download failed — try again") { parakeet.start() }
+            }
         }
 
         if !Permissions.hasAccessibility {

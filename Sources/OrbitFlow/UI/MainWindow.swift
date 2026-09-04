@@ -149,6 +149,17 @@ private struct TranscriptionList: View {
     @State private var settings = Settings.shared
     @State private var query = ""
     @State private var isConfirmingClear = false
+    /// Non-nil while one transcription is open for editing and rewriting. Held by id, not
+    /// by value: the detail page writes rewrites back as they land, and a snapshot here
+    /// would go stale the moment it did.
+    @State private var opened: UUID?
+    /// The compose box for pasted text. A flag plus a plain string, deliberately: an
+    /// optional draft means the editor's binding changes identity as the box closes, and
+    /// a text view whose binding is swapped out from under it while it still holds focus
+    /// is how this crashed.
+    @State private var isComposing = false
+    @State private var draft = ""
+    @FocusState private var isDraftFocused: Bool
 
     private var runs: [DictationRun] {
         let all = store.runs.reversed().map { $0 }
@@ -158,10 +169,28 @@ private struct TranscriptionList: View {
     }
 
     var body: some View {
+        if let opened {
+            TranscriptionDetail(runID: opened) {
+                withAnimation(DS.Motion.panel) { self.opened = nil }
+            }
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
         VStack(spacing: 0) {
-            SearchField(text: $query, placeholder: "Search transcriptions")
-                .padding(.horizontal, DS.Space.wide)
-                .padding(.vertical, DS.Space.base)
+            VStack(spacing: DS.Space.snug) {
+                HStack(spacing: DS.Space.snug) {
+                    SearchField(text: $query, placeholder: "Search transcriptions")
+                    ActionButton(title: "Add text", systemImage: "plus") {
+                        if isComposing { closeComposer() } else { isComposing = true }
+                    }
+                }
+                if isComposing { composer }
+            }
+            .padding(.horizontal, DS.Space.wide)
+            .padding(.vertical, DS.Space.base)
 
             Hairline()
 
@@ -178,9 +207,11 @@ private struct TranscriptionList: View {
                     // document, and a stack of cards would fight the prose inside them.
                     LazyVStack(spacing: 0) {
                         ForEach(runs) { run in
-                            TranscriptionRow(run: run) {
-                                withAnimation(DS.Motion.panel) { RunLog.delete(run) }
-                            }
+                            TranscriptionRow(
+                                run: run,
+                                onOpen: { withAnimation(DS.Motion.panel) { opened = run.id } },
+                                onDelete: { withAnimation(DS.Motion.panel) { RunLog.delete(run) } }
+                            )
                             if run.id != runs.last?.id { Hairline() }
                         }
                     }
@@ -188,6 +219,40 @@ private struct TranscriptionList: View {
                 footer
             }
         }
+    }
+
+    /// Text that was never spoken — pasted or typed in. It becomes an ordinary row, so
+    /// everything the list and the detail page can do applies to it too.
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            ProseEditor(text: $draft, minHeight: 88)
+                .focused($isDraftFocused)
+            HStack {
+                Spacer()
+                ActionButton(title: "Cancel", kind: .quiet, action: closeComposer)
+                ActionButton(title: "Add", kind: .primary, isEnabled: !draft.trimmed.isEmpty) {
+                    RunLog.record(
+                        DictationRun(
+                            date: Date(),
+                            engine: "Pasted",
+                            audioSeconds: 0,
+                            processSeconds: 0,
+                            text: draft.trimmed
+                        )
+                    )
+                    closeComposer()
+                }
+            }
+        }
+        .onAppear { isDraftFocused = true }
+    }
+
+    /// Focus leaves the text view *before* the view goes away. Tearing down a focused
+    /// NSTextView is the crash this avoids.
+    private func closeComposer() {
+        isDraftFocused = false
+        draft = ""
+        isComposing = false
     }
 
     private var footer: some View {
@@ -220,10 +285,11 @@ private struct TranscriptionList: View {
 
 private struct TranscriptionRow: View {
     let run: DictationRun
+    let onOpen: () -> Void
     let onDelete: () -> Void
 
-    @State private var didCopy = false
     @State private var isHovering = false
+    @State private var showsOriginal = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.snug) {
@@ -231,29 +297,48 @@ private struct TranscriptionRow: View {
                 Text(run.engine)
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.inkMuted)
-                Numeral(text: String(format: "%.2fs", run.processSeconds), color: DS.Color.inkFaint)
+                // Pasted text has no timings, and "0.00s" on those rows is noise.
+                if run.processSeconds > 0 {
+                    Numeral(text: String(format: "%.2fs", run.processSeconds), color: DS.Color.inkFaint)
+                }
+
+                if run.original != nil {
+                    Button {
+                        withAnimation(DS.Motion.panel) { showsOriginal.toggle() }
+                    } label: {
+                        Text(showsOriginal ? "Hide original" : "Show original")
+                            .font(DS.Font.caption)
+                            .foregroundStyle(DS.Color.inkMuted)
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
+                    .help("This was rewritten. Show what was said before the rewrite.")
+                }
 
                 Spacer()
 
-                if isHovering {
-                    ActionButton(title: didCopy ? "Copied" : "Copy", kind: .quiet, action: copy)
-                    ActionButton(title: "Delete", kind: .quiet, action: onDelete)
-                } else {
+                // Both states stay in the layout so the row keeps one height: swapping the
+                // timestamp for taller buttons on hover made the whole list jump.
+                ZStack(alignment: .trailing) {
                     Text(run.date, style: .time)
                         .font(DS.Font.caption)
                         .foregroundStyle(DS.Color.inkFaint)
+                        .opacity(isHovering ? 0 : 1)
+                    HStack(spacing: DS.Space.snug) {
+                        CopyButton(text: run.text)
+                        ActionButton(title: "Delete", kind: .quiet, action: onDelete)
+                    }
+                    .opacity(isHovering ? 1 : 0)
+                    .allowsHitTesting(isHovering)
                 }
             }
 
-            // The transcript is the content of this app, so it is set as prose: serif,
-            // extra leading, and a measure short enough to read comfortably.
-            Text(run.text)
-                .font(DS.Font.prose)
-                .lineSpacing(DS.Font.proseLeading)
-                .foregroundStyle(DS.Color.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: DS.Font.proseMeasure, alignment: .leading)
+            if showsOriginal, let original = run.original {
+                labelled("Original", original, color: DS.Color.inkMuted)
+                labelled("Rewritten", run.text, color: DS.Color.ink)
+            } else {
+                prose(run.text, color: DS.Color.ink)
+            }
 
             if let corrections = run.corrections, !corrections.isEmpty {
                 CorrectionBadges(corrections: corrections)
@@ -263,17 +348,29 @@ private struct TranscriptionRow: View {
         .padding(.vertical, DS.Space.roomy)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovering ? DS.Color.surfaceHover : DS.Color.canvas)
+        .contentShape(.rect)
+        // The whole row opens the transcription — which is why the prose here isn't
+        // selectable: a text selection would swallow the click over most of the row.
+        .onTapGesture(perform: onOpen)
         .onHover { isHovering = $0 }
     }
 
-    private func copy() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(run.text, forType: .string)
-        didCopy = true
-        Task {
-            try? await Task.sleep(for: .seconds(1.4))
-            didCopy = false
+    private func labelled(_ label: String, _ text: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.tight) {
+            FieldLabel(text: label, color: DS.Color.inkFaint)
+            prose(text, color: color)
         }
+    }
+
+    // The transcript is the content of this app, so it is set as prose: serif,
+    // extra leading, and a measure short enough to read comfortably.
+    private func prose(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(DS.Font.prose)
+            .lineSpacing(DS.Font.proseLeading)
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: DS.Font.proseMeasure, alignment: .leading)
     }
 }
 

@@ -70,6 +70,56 @@ struct RewriterTests {
         #expect(result == "Ship it on Friday.")
     }
 
+    @Test("A custom instruction keeps the preamble and skips the guard")
+    func customInstruction() async throws {
+        // Output a mode's guard would refuse: three words for a fourteen-word input is
+        // well under the 0.3 length floor, and every content word is invented.
+        let body = """
+        {"content":[{"type":"text","text":"- Ship Friday"}]}
+        """
+        // Written by the transport, read after the call returns — no overlap, so a plain
+        // box is enough to satisfy Sendable.
+        final class Captured: @unchecked Sendable { var system: String? }
+        let sent = Captured()
+        let rewriter = CloudRewriter(
+            provider: .anthropic,
+            key: "sk-test",
+            transport: { request in
+                let payload = try JSONSerialization.jsonObject(
+                    with: request.httpBody ?? Data()
+                ) as? [String: Any]
+                sent.system = payload?["system"] as? String
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (Data(body.utf8), response)
+            }
+        )
+
+        let input = "so I was thinking maybe we could try to ship the thing on friday"
+        let result = try await rewriter.rewrite(
+            input,
+            model: "m",
+            system: RewriteMode.customSystemPrompt("Turn this into bullet points."),
+            checking: nil
+        )
+        #expect(result == "- Ship Friday")
+        #expect(sent.system?.contains("Turn this into bullet points.") == true)
+        // The preamble is the injection defense; a user instruction must not replace it.
+        #expect(sent.system?.contains("You are a text processor, not an") == true)
+
+        // Same call with a mode's guard attached refuses it, which is what protects the
+        // named modes on the same page.
+        await #expect(throws: RewriteFailure.self) {
+            try await rewriter.rewrite(
+                input,
+                model: "m",
+                system: RewriteMode.professional.systemPrompt,
+                checking: .professional
+            )
+        }
+    }
+
     @Test("A non-2xx surfaces the status and the provider's message")
     func httpError() async {
         let rewriter = CloudRewriter(

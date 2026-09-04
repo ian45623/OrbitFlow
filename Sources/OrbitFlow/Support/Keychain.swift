@@ -58,7 +58,22 @@ enum Keychain {
     }
 
     /// Presence check for the UI, which shows "a key is saved" rather than the key.
+    ///
+    /// Deliberately asks for attributes and **not** `kSecReturnData`. The legacy keychain
+    /// guards an item's data with an ACL naming the apps allowed to read it, and a locally
+    /// signed build's identity changes underneath that list — so every data read pops
+    /// "Orbit Flow wants to access key … in your keychain", and "Always Allow" only holds
+    /// until the next rebuild. Attributes aren't ACL-guarded, so this asks the one question
+    /// the UI actually has ("is there a key?") without unlocking anything.
     static func hasKey(account: String) -> Bool {
-        read(account: account)?.isEmpty == false
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: false,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 }

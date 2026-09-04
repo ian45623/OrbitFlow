@@ -14,7 +14,7 @@ final class HUDPanel: NSPanel {
     /// exactly to the panel has nowhere to put its shadow: the blur is cut off flush at the
     /// edge and the corners read as hard squares instead of fading out. The margin has to
     /// clear `DS.Shadow.hud`'s radius *plus* its downward offset.
-    static let shadowMargin: CGFloat = 28
+    static let shadowMargin: CGFloat = 12
 
     /// The window size for a given pill: the capsule plus margin on all sides.
     static func panelSize(for hud: HUDSize) -> CGSize {

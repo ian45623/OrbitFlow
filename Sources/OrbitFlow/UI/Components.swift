@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // The visual vocabulary of the app: surfaces, labels, controls, and the one live element.
@@ -190,6 +191,13 @@ struct Segmented<Value: Hashable>: View {
                                     .fill(DS.Color.surface)
                             }
                         }
+                        // Without this the segment is only clickable on the letterforms.
+                        // A `.plain` button hit-tests what its label actually draws, and an
+                        // *unselected* segment draws nothing but the word — the padding and
+                        // the `maxWidth: .infinity` that make it look like a wide target are
+                        // empty space. The selected one works, which is what makes the bug
+                        // read as "sometimes it ignores me" rather than as a dead zone.
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -425,5 +433,104 @@ struct EmptyPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(DS.Space.panel)
+    }
+}
+
+/// Copy-to-clipboard with the acknowledgement built in. Every place that offers a copy
+/// wants the same brief "Copied" flip, so the flip lives here rather than in each caller.
+struct CopyButton: View {
+    let text: String
+    var title = "Copy"
+    var kind: ActionButton.Kind = .quiet
+
+    @State private var didCopy = false
+
+    var body: some View {
+        ActionButton(title: didCopy ? "Copied" : title, kind: kind) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            didCopy = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.4))
+                didCopy = false
+            }
+        }
+    }
+}
+
+/// A multi-line box for transcript-sized text: same inset field as `EntryField`, but set
+/// in prose, because what gets typed into it is prose rather than a setting.
+struct ProseEditor: View {
+    @Binding var text: String
+    var minHeight: CGFloat = 96
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(DS.Font.prose)
+            .lineSpacing(DS.Font.proseLeading)
+            .foregroundStyle(DS.Color.ink)
+            .scrollContentBackground(.hidden)
+            .padding(DS.Space.snug)
+            .frame(minHeight: minHeight)
+            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.control)
+                    .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+            )
+    }
+}
+
+/// Lays children out in a row and wraps to the next line when they don't fit.
+///
+/// SwiftUI has no wrapping stack. A horizontal `ScrollView` is the usual substitute, but
+/// it hides items off the edge — which is the wrong trade for a set of choices the user
+/// is supposed to be comparing at a glance.
+struct Flow: Layout {
+    var spacing: CGFloat = DS.Space.snug
+    var lineSpacing: CGFloat = DS.Space.snug
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.replacingUnspecifiedDimensions().width
+        let rows = lay(subviews, in: width)
+        let height = rows.map(\.height).reduce(0, +)
+            + lineSpacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in lay(subviews, in: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                    proposal: ProposedViewSize(size)
+                )
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var height: CGFloat = 0
+    }
+
+    private func lay(_ subviews: Subviews, in width: CGFloat) -> [Row] {
+        var rows = [Row()]
+        var x: CGFloat = 0
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                rows.append(Row())
+                x = 0
+            }
+            rows[rows.count - 1].indices.append(index)
+            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
+            x += size.width + spacing
+        }
+        return rows
     }
 }

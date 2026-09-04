@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import OrbitFlowAIRewrite
 
@@ -17,6 +18,17 @@ struct SettingsPanel: View {
     @State private var isTesting = false
     @State private var testResult: TestResult?
     @State private var availableModels: [String] = []
+
+    /// Shared, so a download started from the menu bar — or by a first dictation —
+    /// shows up here too.
+    @State private var parakeet = ParakeetDownload.shared
+    @State private var isConfirmingRemove = false
+
+    /// `SMAppService` is the store for this — there is no mirrored bool in `Settings`,
+    /// so the switch can never disagree with System Settings ▸ General ▸ Login Items.
+    /// Held in state only so the toggle redraws; re-read after every change.
+    @State private var loginItem = SMAppService.mainApp.status
+    @State private var loginItemError: String?
 
     private enum TestResult: Equatable {
         case success(count: Int)
@@ -65,7 +77,8 @@ struct SettingsPanel: View {
                     )
                     note(settings.engine == .apple
                         ? "Apple's on-device transcriber. Streams text while you speak, and needs no download."
-                        : "Parakeet on the Neural Engine. Resolves when you let go; downloads a 470 MB model once.")
+                        : "Parakeet on the Neural Engine. Resolves when you let go, and is more accurate on English.")
+                    if settings.engine == .parakeet { parakeetModelRow }
                 }
 
                 group("Dictation pill") {
@@ -150,6 +163,41 @@ struct SettingsPanel: View {
                     }
                 }
 
+                group("Launch at login") {
+                    Toggle(isOn: launchAtLoginBinding) {
+                        Text("Open Orbit Flow when I log in")
+                            .font(DS.Font.body)
+                            .foregroundStyle(DS.Color.ink)
+                    }
+                    .toggleStyle(.switch)
+
+                    if loginItem == .requiresApproval {
+                        note("macOS is holding this back. Approve Orbit Flow under Login Items "
+                            + "and it will start with your Mac.")
+                        ActionButton(title: "Open login items") {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                    } else {
+                        note("Orbit Flow starts with your Mac, hotkey already armed.")
+                    }
+
+                    if let loginItemError {
+                        note(loginItemError)
+                    }
+
+                    // A login item and a TCC grant both point at a path. ~/Library/Caches is
+                    // purgeable and `make run` rewrites the bundle there on every build, so a
+                    // copy running from it loses both — which is exactly what "it keeps asking
+                    // for permission" looks like from the outside.
+                    if !isInstalledCopy {
+                        note("This copy is running from "
+                            + "\(Bundle.main.bundleURL.deletingLastPathComponent().path), which "
+                            + "macOS can delete. Run `make install` and launch it from "
+                            + "Applications so the login item and the Accessibility grant stick.")
+                    }
+                }
+                .onAppear { loginItem = SMAppService.mainApp.status }
+
                 group("When you close the window") {
                     Text("Orbit Flow keeps running and the key stays armed. Reopen it from the menu "
                         + "bar or the Dock icon; quit from the Dock, the menu bar, or ⌘Q.")
@@ -161,6 +209,89 @@ struct SettingsPanel: View {
             .frame(maxWidth: measure, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(DS.Space.wide)
+        }
+    }
+
+    /// Picking Parakeet used to end in a sentence about a 470 MB download and no way to
+    /// start one: the only trigger was a menu bar item you had to find, or a first dictation
+    /// that stalled for minutes looking like a hang. The download belongs next to the choice
+    /// that needs it, with a number attached to the waiting.
+    @ViewBuilder
+    private var parakeetModelRow: some View {
+        switch parakeet.phase {
+        case .ready:
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                HStack(spacing: DS.Space.snug) {
+                    StatusDot(color: DS.Color.positive, isOn: true)
+                    // Says the thing the dot alone doesn't: yes, it's already here, and
+                    // this much of your disk is it.
+                    Text("Downloaded and ready\(parakeet.installedSize.map { " — \(byteCount($0)) on this Mac" } ?? ""). "
+                        + "Nothing left to install.")
+                        .font(DS.Font.caption)
+                        .foregroundStyle(DS.Color.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ActionButton(title: "Remove model", kind: .quiet) { isConfirmingRemove = true }
+                    .confirmationDialog(
+                        "Remove the Parakeet model?",
+                        isPresented: $isConfirmingRemove
+                    ) {
+                        Button("Remove", role: .destructive) { parakeet.removeFromDisk() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Frees \(parakeet.installedSize.map(byteCount) ?? "about 470 MB"). "
+                            + "You can download it again from here at any time; dictation falls "
+                            + "back to Apple's engine until you do.")
+                    }
+            }
+            .padding(DS.Space.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+        case .working(let label, let fraction):
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .tint(DS.Color.ink)
+                // Named phases rather than one bar: most of the wait is the download, but
+                // the compile at the end is slow and silent, and a bar parked at 100%
+                // reads as a hang.
+                Text("\(label)… \(Int(fraction * 100))% — this keeps going if you close "
+                    + "the window. Apple's engine still works meanwhile.")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DS.Space.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+        case .missing, .failed:
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                if case .failed(let message) = parakeet.phase {
+                    HStack(alignment: .top, spacing: DS.Space.snug) {
+                        StatusDot(color: DS.Color.signal, isOn: true)
+                        Text("The download stopped: \(message)")
+                            .font(DS.Font.caption)
+                            .foregroundStyle(DS.Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text("Parakeet runs entirely on your Mac, so its model has to live here: "
+                        + "a one-time 470 MB download. Nothing to find or install by hand — "
+                        + "press the button and it fetches itself.")
+                        .font(DS.Font.caption)
+                        .foregroundStyle(DS.Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ActionButton(
+                    title: parakeet.phase == .missing ? "Download model (470 MB)" : "Try again",
+                    kind: .primary
+                ) {
+                    parakeet.start()
+                }
+            }
+            .padding(DS.Space.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
         }
     }
 
@@ -192,6 +323,33 @@ struct SettingsPanel: View {
         .padding(DS.Space.base)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+    }
+
+    /// Registering points the login item at *this* bundle, wherever it happens to be.
+    private var isInstalledCopy: Bool {
+        Bundle.main.bundleURL.deletingLastPathComponent().lastPathComponent == "Applications"
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { loginItem == .enabled },
+            set: { isOn in
+                do {
+                    loginItemError = nil
+                    if isOn {
+                        try SMAppService.mainApp.register()
+                    } else {
+                        try SMAppService.mainApp.unregister()
+                    }
+                } catch {
+                    // Registration fails silently otherwise: the switch springs back with no
+                    // explanation, which reads as the app being broken rather than macOS
+                    // refusing the bundle.
+                    loginItemError = "macOS refused: \(error.localizedDescription)"
+                }
+                loginItem = SMAppService.mainApp.status
+            }
+        )
     }
 
     /// The AI rewrite switch is a view over `cleanupTier`, not a second stored flag —
@@ -376,6 +534,10 @@ struct SettingsPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private func byteCount(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func group<Content: View>(

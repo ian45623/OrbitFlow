@@ -47,8 +47,7 @@ struct HUDView: View {
                 style: .continuous
             )
             shape
-                .fill(.ultraThinMaterial)
-                .overlay(shape.fill(DS.Color.hudSurface))
+                .fill(DS.Color.hudSurface)
                 .overlay(shape.strokeBorder(DS.Color.hudEdge, lineWidth: DS.Border.hairline))
                 .shadow(
                     color: DS.Shadow.hud.color,

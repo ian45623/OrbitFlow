@@ -71,8 +71,24 @@ public struct CloudRewriter: Sendable {
         model: String,
         mode: RewriteMode
     ) async throws -> String {
+        try await rewrite(text, model: model, system: mode.systemPrompt, checking: mode)
+    }
+
+    /// - Parameters:
+    ///   - system: The whole system prompt. Callers with a user-written instruction build
+    ///     it with `RewriteMode.customSystemPrompt`, which keeps the shared preamble.
+    ///   - mode: The mode whose guard to apply, or `nil` to skip the guard. Only skip it
+    ///     where the result is shown to the user rather than typed into their document:
+    ///     an instruction like "make this three bullets" legitimately blows the length
+    ///     band, and there is no way to tell that from a model that went off the rails.
+    public func rewrite(
+        _ text: String,
+        model: String,
+        system: String,
+        checking mode: RewriteMode?
+    ) async throws -> String {
         let request = provider.rewriteRequest(
-            model: model, key: key, system: mode.systemPrompt, text: text
+            model: model, key: key, system: system, text: text
         )
         let data = try await send(request)
 
@@ -81,7 +97,8 @@ public struct CloudRewriter: Sendable {
         }
         let output = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let reason = RewriteGuard.rejection(original: text, output: output, mode: mode) {
+        if let mode,
+           let reason = RewriteGuard.rejection(original: text, output: output, mode: mode) {
             throw RewriteFailure.rejected(reason)
         }
         return output

@@ -26,8 +26,12 @@ CONTENTS := $(BUNDLE)/Contents
 ## changes on every build — makes the user re-grant after every `make`. Signing with a
 ## stable Developer ID keeps the identity constant and the grant sticky. Falls back to
 ## ad-hoc ("-") on a machine without the cert.
+##
+## `make cert` creates the self-signed fallback once; without either, we sign ad-hoc, whose
+## cdhash changes on every build.
+CERT_CN := Orbit Flow Local
 SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null \
-             | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+             | grep -E "Developer ID Application|$(CERT_CN)" | head -1 | sed -E 's/.*"(.*)".*/\1/')
 ifeq ($(strip $(SIGN_ID)),)
 SIGN_ID := -
 endif
@@ -47,7 +51,7 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon
+.PHONY: all build test app run install clean icon cert
 
 all: app
 
@@ -105,10 +109,12 @@ app: build
 		"$(BUNDLE)"
 	@echo "built $(BUNDLE)  [signed: $(SIGN_ID)]"
 
-## Only ever targets the OrbitFlow executable — never the separate `orbitflow` app.
-run: app
-	@pkill -x $(EXEC) 2>/dev/null || true
-	@open "$(BUNDLE)"
+## Runs the *installed* copy, never the staging bundle.
+##
+## A TCC grant and a login item both point at a path, and $(STAGE) sits under
+## ~/Library/Caches — which macOS purges, and which this Makefile rewrites on every build.
+## Launching from there is why permission prompts come back.
+run: install
 
 ## Ad-hoc signatures change on every rebuild, which resets the Accessibility grant.
 ## Installing keeps the path stable and makes re-granting a one-click fix.
@@ -127,6 +133,37 @@ install: app
 	@cp -R "$(BUNDLE)" "$(INSTALL_DIR)/$(APPNAME)"
 	@open "$(INSTALL_DIR)/$(APPNAME)"
 	@echo "installed to $(INSTALL_DIR)/$(APPNAME)"
+
+## One-time: a stable self-signed code-signing identity, so the Accessibility grant sticks.
+##
+## Ad-hoc signing has no certificate, so TCC has nothing durable to pin the grant to and
+## re-asks after builds. A self-signed cert gives the bundle a designated requirement that
+## survives every rebuild. Expect two macOS prompts for your login password — import, then
+## trust. Delete it with:
+##   security delete-certificate -c "$(CERT_CN)" ~/Library/Keychains/login.keychain-db
+##
+## The PKCS#12 password is deliberately not empty: `security import` rejects an
+## empty-password bundle with "MAC verification failed during PKCS12 import (wrong
+## password?)". The value itself is irrelevant — the .p12 lives in $$d for two lines and
+## the trap deletes it on exit.
+cert:
+	@set -e; \
+	if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(CERT_CN)"; then \
+	  echo "already have \"$(CERT_CN)\" — nothing to do"; exit 0; \
+	fi; \
+	d=$$(mktemp -d); trap 'rm -rf "'"$$d"'"' EXIT; \
+	openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+	  -keyout "$$d/k.pem" -out "$$d/c.pem" -subj "/CN=$(CERT_CN)" \
+	  -addext "basicConstraints=critical,CA:false" \
+	  -addext "keyUsage=critical,digitalSignature" \
+	  -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null; \
+	openssl pkcs12 -export -out "$$d/i.p12" -inkey "$$d/k.pem" -in "$$d/c.pem" \
+	  -passout pass:orbitflow; \
+	security import "$$d/i.p12" -k "$(HOME)/Library/Keychains/login.keychain-db" \
+	  -P orbitflow -A; \
+	security add-trusted-cert -r trustRoot -p codeSign \
+	  -k "$(HOME)/Library/Keychains/login.keychain-db" "$$d/c.pem"; \
+	echo "created \"$(CERT_CN)\" — now run: make install"
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"

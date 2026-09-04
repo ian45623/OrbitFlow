@@ -41,6 +41,15 @@ public enum RewriteMode: String, CaseIterable, Sendable {
 
     public var systemPrompt: String { Self.preamble + "\n\n" + instruction }
 
+    /// A system prompt for an instruction the user typed themselves.
+    ///
+    /// Keeps the shared preamble: it is what stops the model treating the transcript as a
+    /// request addressed to it, and a user asking for bullet points is not asking to drop
+    /// that defense.
+    public static func customSystemPrompt(_ instruction: String) -> String {
+        preamble + "\n\n" + instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Shared by every mode. The rules here are the ones that hold whatever the tone:
     /// don't answer the content, don't invent facts, don't translate, don't pad.
     private static let preamble = """
