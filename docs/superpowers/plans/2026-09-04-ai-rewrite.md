@@ -1963,12 +1963,21 @@ with:
 ```swift
             // Only the cloud tier is slow enough to need saying out loud; rules are
             // instant and the on-device pass is bounded at four seconds.
-            isRewriting = Settings.shared.cleanupEnabled
-                && Settings.shared.cleanupTier == .cloud
+            //
+            // Both writes are gated on the run token. Discarding does not cancel the tail
+            // — it issues a new token and lets the in-flight work finish, suppressing only
+            // the paste. So a discarded utterance's cloud call can return *after* the user
+            // has started a new dictation, and an ungated reset would clear the flag out
+            // from under the live run: the HUD would stop saying "Rewriting…" while it is
+            // still, in fact, rewriting.
+            if token == runToken {
+                isRewriting = Settings.shared.cleanupEnabled
+                    && Settings.shared.cleanupTier == .cloud
+            }
             let cleaned = Settings.shared.cleanupEnabled
                 ? await activeFormatter.format(raw)
                 : raw
-            isRewriting = false
+            if token == runToken { isRewriting = false }
 ```
 
 - [ ] **Step 4: Say so in the HUD**
