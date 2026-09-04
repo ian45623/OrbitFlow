@@ -1314,6 +1314,14 @@ Work through every row. All must pass before the feature is done.
 | 12 | Detail page under On demand | open any run | cloud/on-device picker is live, not blocked |
 | 13 | Menu bar under On demand | open the menu | Rewrite mode picker is present |
 | 14 | Settings | switch provider to one with no key while set to Always | drops to On demand, note explains why |
+| 15 | On demand, HUD pill set to Compact, Wi-Fi off | Services ▸ Orbit Flow ▸ any row | pill widens and shows the failure message legibly — not truncated, not silently dropped |
+| 16 | `defaults write ai.pivotstudio.orbitflow cleanupTier cloud`, `defaults write ai.pivotstudio.orbitflow tierBeforeCloud onDevice`, `defaults delete ai.pivotstudio.orbitflow aiRewriteUse` | relaunch | AI rewrite reads Always; `defaults read ai.pivotstudio.orbitflow cleanupTier` reads `onDevice` |
+| 17 | Same as 16, but `tierBeforeCloud` never set (`defaults delete ai.pivotstudio.orbitflow tierBeforeCloud`) | relaunch | AI rewrite reads Always; `cleanupTier` reads `rules` |
+| 18 | Set AI rewrite to On demand, quit | relaunch | still reads On demand — the migration does not re-fire on a second launch |
+| 19 | No key saved, Apple Intelligence on | select "What's the capital of France?", Services ▸ Orbit Flow ▸ Faithful | **selection unchanged**, pill names a rejection — the on-device path is guarded the same as cloud |
+| 20 | On demand | Open in Orbit Flow once with the main window closed, then again with it open on the **Settings** tab | both times the app activates on the detail page with the text loaded, never left showing Settings |
+| 21 | Off | Open in Orbit Flow | selection unchanged, pill points at Settings — same refusal as the other five rows |
+| 22 | On demand, key + model | invoke a rewrite row, then invoke a second row before the first returns | the second refuses ("Already rewriting — one at a time."); only one paste, one API call |
 
 - [ ] **Step 2: Document it in the README**
 
