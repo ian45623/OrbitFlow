@@ -59,6 +59,13 @@ final class DictationController {
     /// instead of showing a resolved-but-frozen transcript for up to eight seconds.
     private(set) var isRewriting = false
 
+    /// A transient message for the pill, shown when no dictation is running.
+    ///
+    /// The on-demand rewrite's only way to speak. It must not steal focus — the user is
+    /// mid-edit in another app and a panel that activates would move their cursor — and the
+    /// HUD is already a non-activating panel, so it is the one surface that qualifies.
+    private(set) var notice: String?
+
     private let hotkey = HotkeyMonitor()
     private let capture = AudioCapture()
     private let makeEngine: @Sendable () -> any TranscriptionEngine
@@ -231,6 +238,28 @@ final class DictationController {
         guard state.isActive else { return }
         runToken = UUID()
         cancelDictation()
+    }
+
+    /// Shows `message` in the pill for three seconds.
+    ///
+    /// The token check matters: two rewrites in quick succession would otherwise have the
+    /// first one's timer clear the second one's message three seconds early.
+    func flash(_ message: String) {
+        notice = message
+        let shown = message
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if notice == shown { notice = nil }
+        }
+    }
+
+    /// Clears any notice and shows or hides "Rewriting…" for an on-demand run.
+    ///
+    /// Separate from the private `isRewriting` writes in `endDictation`, which are gated on
+    /// the dictation run token and must stay that way.
+    func setRewriting(_ running: Bool) {
+        if running { notice = nil }
+        isRewriting = running
     }
 
     // MARK: - Dictation

@@ -172,14 +172,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func observeState() {
         withObservationTracking {
             _ = controller.state
+            _ = controller.notice
+            _ = controller.isRewriting
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.controller.state.isActive {
-                    self.hud?.present()
-                } else {
-                    self.hud?.dismiss()
-                }
+                // The pill is up for a live dictation, for an on-demand rewrite in flight,
+                // and for the three seconds a notice is on screen.
+                let wanted = self.controller.state.isActive
+                    || self.controller.notice != nil
+                    || self.controller.isRewriting
+                if wanted { self.hud?.present() } else { self.hud?.dismiss() }
                 self.observeState()
             }
         }
