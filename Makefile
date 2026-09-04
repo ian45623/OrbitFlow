@@ -132,6 +132,9 @@ install: app
 	@rm -rf "$(INSTALL_DIR)/$(APPNAME)"
 	@cp -R "$(BUNDLE)" "$(INSTALL_DIR)/$(APPNAME)"
 	@open "$(INSTALL_DIR)/$(APPNAME)"
+	@# pbs caches the Services database and does not notice a changed Info.plist on its
+	@# own, so every build that touches NSServices would otherwise show stale rows.
+	@/System/Library/CoreServices/pbs -flush 2>/dev/null || true
 	@echo "installed to $(INSTALL_DIR)/$(APPNAME)"
 
 ## One-time: a stable self-signed code-signing identity, so the Accessibility grant sticks.

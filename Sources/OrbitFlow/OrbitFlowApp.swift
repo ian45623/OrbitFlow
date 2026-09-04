@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = DictationController()
     private var hud: HUDPanel?
     private var stateObservation: NSObjectProtocol?
+    private var rewriteService: RewriteService?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A regular app now: dock icon, app menu, standard windows. The HUD is still a
@@ -68,6 +69,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         hud = HUDPanel(controller: controller)
+
+        // Held in a property because `servicesProvider` is an unowned reference — an
+        // inline instance would deallocate and every right-click row would silently
+        // do nothing. NSUpdateDynamicServices tells the system to re-read Info.plist,
+        // which matters on the launch right after a build changed it.
+        let service = RewriteService(controller: controller)
+        rewriteService = service
+        NSApp.servicesProvider = service
+        NSUpdateDynamicServices()
 
         if !controller.activate() {
             // Only prompt when we're actually untrusted. A tap can fail to be created for
