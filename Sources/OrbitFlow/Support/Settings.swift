@@ -23,18 +23,17 @@ enum SpeechEngineChoice: String, CaseIterable, Sendable {
 /// No longer expresses the cloud: `AIRewriteUse` owns that decision now, and having two
 /// properties able to disagree about whether text leaves the Mac is not a risk worth
 /// carrying. The `cloud` case that used to live here is migrated away in `init`.
-enum CleanupTier: String, CaseIterable, Sendable {
+///
+/// No UI sets this any more, either — the Rules/On-device picker went away with the
+/// `cloud` case it used to disambiguate. `Settings.init`'s migration is now the only
+/// writer: on-device for a user who had `smartCleanup` on, rules for everyone else.
+/// Reintroducing a picker for it is new scope, not a fix for the dead end this
+/// migration leaves behind.
+enum CleanupTier: String, Sendable {
     /// Deterministic, zero-latency, always available.
     case rules
     /// Apple's on-device Foundation Model. Nothing leaves the Mac.
     case onDevice
-
-    var displayName: String {
-        switch self {
-        case .rules: "Rules"
-        case .onDevice: "On-device"
-        }
-    }
 }
 
 /// How much of the dictation pill to show while you're talking.

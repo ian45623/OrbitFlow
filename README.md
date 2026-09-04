@@ -240,20 +240,15 @@ advance.
 
 ## Not built yet
 
-1. **LLM cleanup tier.** `RuleBasedFormatter` strips fillers, fixes spacing, capitalizes
-   sentences and adds terminal punctuation — genuinely useful, entirely deterministic. The
-   real win is a second `TextFormatter` backed by Apple's on-device Foundation Models
-   (macOS 26) for tone, list formatting, and honoring spoken corrections, with Claude as an
-   optional higher-quality tier.
-2. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
+1. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
    Needs AX read of `kAXSelectedTextAttribute` plus an LLM round-trip.
-3. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
+2. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
    supports this through `AnalysisContext` / `SFCustomLanguageModelData`.
-4. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
+3. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
    real palette, HUD motion design, onboarding.
-5. **Onboarding.** A first-run window that walks through both permissions instead of
+4. **Onboarding.** A first-run window that walks through both permissions instead of
    relying on the menu's "Grant…" items.
-6. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
+5. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
    distributable.
 
 ---

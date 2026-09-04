@@ -1,9 +1,10 @@
 import Foundation
 
-/// The tone the cloud tier rewrites into.
+/// The tone a rewrite produces.
 ///
-/// `faithful` is the default so that switching the tier on cannot change the user's
-/// words until they ask it to.
+/// Used in two places: dictation, when `AIRewriteUse` is `always`, and the right-click
+/// Services rows, whenever it isn't `off`. `faithful` is the default so that turning
+/// either one on cannot change the user's words until they ask it to.
 public enum RewriteMode: String, CaseIterable, Sendable {
     case faithful
     case casual

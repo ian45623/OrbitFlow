@@ -120,11 +120,7 @@ struct SettingsPanel: View {
                     note(settings.aiRewriteUse.summary)
 
                     if settings.aiRewriteUse != .off, !canUseCloud {
-                        note(hasStoredKey
-                            ? "Press Test below to pick a model. Until then, rewrites use Apple's "
-                                + "on-device model."
-                            : "Save an API key below to use \(settings.aiProvider.displayName). Until "
-                                + "then, rewrites use Apple's on-device model.")
+                        note(cloudFallbackNote)
                     }
 
                     if settings.aiRewriteUse == .always, !settings.cleanupEnabled {
@@ -350,6 +346,27 @@ struct SettingsPanel: View {
     /// A cloud rewrite needs both halves. Either one missing means every call would
     /// fall back, so the UI must not present it as configured.
     private var canUseCloud: Bool { hasStoredKey && !settings.aiModel.isEmpty }
+
+    /// What actually happens without a working cloud setup, which is not the same
+    /// sentence for dictation as it is for the right-click rows. `CloudFormatter`
+    /// degrades to the rule-based cleanup, because losing an utterance the user already
+    /// spoke is worse than a plain one; `OnDemandRewrite` degrades to Apple's on-device
+    /// model instead, because the entire point of a Services row is a rewrite, and
+    /// on-device still is one. Reachable under `Always` only through the legacy-key
+    /// migration — the picker itself clamps back to On demand — but that's exactly the
+    /// case this note has to describe correctly rather than the common one.
+    private var cloudFallbackNote: String {
+        let keyStep = hasStoredKey
+            ? "Press Test below to pick a model."
+            : "Save an API key below to use \(settings.aiProvider.displayName)."
+        if settings.aiRewriteUse == .always {
+            return keyStep + " Until then, dictation falls back to the rule-based cleanup, "
+                + "and the right-click rows use Apple's on-device model instead of the cloud."
+        }
+        return keyStep + " Until then, the right-click rows use Apple's on-device model. "
+            + "Always needs both a key and a model before you can pick it — without them "
+            + "it springs back to On demand."
+    }
 
     private func refreshKeyPresence() {
         hasStoredKey = Keychain.hasKey(account: settings.aiProvider.rawValue)
