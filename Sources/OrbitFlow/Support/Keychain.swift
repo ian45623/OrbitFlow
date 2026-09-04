@@ -14,8 +14,11 @@ enum Keychain {
     /// less code than the `SecItemUpdate` branch.
     @discardableResult
     static func save(_ value: String, account: String) -> Bool {
-        delete(account: account)
+        // Encode BEFORE deleting. The other order destroys the stored key and then
+        // returns false, which a caller reads as "nothing changed" — the one outcome
+        // a secret store must never produce.
         guard let data = value.data(using: .utf8) else { return false }
+        delete(account: account)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
