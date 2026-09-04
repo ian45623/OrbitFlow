@@ -501,10 +501,13 @@ struct ResponseTests {
         #expect(AIResponse.text(from: Data(), dialect: dialect) == nil)
     }
 
-    @Test("Model IDs parse from the shared data[].id shape")
+    /// The parser preserves the provider's order. Sorting is CloudRewriter's job, not
+    /// this function's — keeping that split is why the fixture here is deliberately not
+    /// in sorted order.
+    @Test("Model IDs parse from the shared data[].id shape, in provider order")
     func modelIDs() {
         let payload = data("""
-        {"data":[{"id":"claude-haiku-4-5"},{"id":"claude-opus-5"}]}
+        {"data":[{"id":"claude-opus-5"},{"id":"claude-haiku-4-5"}]}
         """)
         #expect(AIResponse.modelIDs(from: payload) == ["claude-opus-5", "claude-haiku-4-5"])
     }
@@ -925,10 +928,44 @@ struct GuardTests {
         #expect(RewriteGuard.rejection(original: original, output: output, mode: .faithful) != nil)
     }
 
+    /// Found in review. This output introduces no new content word and sits inside the
+    /// length band, so every other check passes it — and it says the opposite of what was
+    /// dictated.
+    @Test("Faithful rejects a dropped negation that would invert the meaning")
+    func faithfulRejectsDroppedNegation() {
+        let reason = RewriteGuard.rejection(
+            original: "the meeting is not canceled",
+            output: "The meeting is canceled.",
+            mode: .faithful
+        )
+        #expect(reason == .droppedNegation(["not"]))
+    }
+
+    @Test("Faithful accepts output that keeps the negation")
+    func faithfulKeepsNegation() {
+        #expect(RewriteGuard.rejection(
+            original: "um the meeting is not canceled",
+            output: "The meeting is not canceled.",
+            mode: .faithful
+        ) == nil)
+    }
+
+    /// Why the negation check is faithful-only: "not able" to "unable" is a good
+    /// professional rewrite, and demanding the literal token would refuse it.
+    @Test("Rewrite modes are not held to the literal negation token")
+    func rewriteMayRephraseNegation() {
+        #expect(RewriteGuard.rejection(
+            original: "i am not able to make it",
+            output: "I am unable to attend.",
+            mode: .professional
+        ) == nil)
+    }
+
     @Test("Rejection summaries are non-empty so the log line says something")
     func summaries() {
         #expect(!Rejection.empty.summary.isEmpty)
         #expect(!Rejection.inventedWords(["paris"]).summary.isEmpty)
+        #expect(!Rejection.droppedNegation(["not"]).summary.isEmpty)
         #expect(!Rejection.lengthRatio(4.2).summary.isEmpty)
         #expect(!Rejection.preambleTell("sure,").summary.isEmpty)
     }
@@ -952,6 +989,7 @@ import Foundation
 public enum Rejection: Equatable, Sendable {
     case empty
     case inventedWords([String])
+    case droppedNegation([String])
     case lengthRatio(Double)
     case preambleTell(String)
 
@@ -961,6 +999,8 @@ public enum Rejection: Equatable, Sendable {
             "empty input or output"
         case .inventedWords(let words):
             "invented words: \(words.joined(separator: ", "))"
+        case .droppedNegation(let words):
+            "dropped negation: \(words.joined(separator: ", "))"
         case .lengthRatio(let ratio):
             "length ratio \(String(format: "%.2f", ratio))"
         case .preambleTell(let tell):
@@ -1017,6 +1057,15 @@ public enum RewriteGuard {
         }
 
         if !mode.isRewrite {
+            // A cleanup may not quietly drop a negation. "the meeting is not canceled"
+            // becoming "The meeting is canceled." introduces no new word and lands well
+            // inside the length band, so neither check below sees it — and it inverts
+            // what the speaker said. In the mode advertised as the strictest, and used by
+            // default, that is the worst thing this guard could let through.
+            let lost = Set(originalTokens).intersection(negations)
+                .subtracting(Set(outputTokens))
+            if !lost.isEmpty { return .droppedNegation(lost.sorted()) }
+
             let vocabulary = Set(originalTokens)
             let invented = outputTokens.filter { !vocabulary.contains($0) }
             if !invented.isEmpty { return .inventedWords(Array(invented.prefix(5))) }
@@ -1033,6 +1082,17 @@ public enum RewriteGuard {
 
         return nil
     }
+
+    /// Words whose disappearance reverses meaning.
+    ///
+    /// Consulted for `faithful` only. A rewrite may legitimately turn "not able" into
+    /// "unable", so requiring the literal token there would reject good output — and in
+    /// faithful mode such a rephrasing is caught by the invented-words check anyway.
+    /// None of these appear in `stopWords`, so they always survive `contentWords`.
+    private static let negations: Set<String> = [
+        "not", "no", "never", "none", "nothing", "nobody", "nowhere",
+        "cannot", "neither", "nor", "without",
+    ]
 
     private static let tells = [
         "here's the cleaned", "here is the cleaned",
@@ -1327,13 +1387,15 @@ struct RewriterTests {
         }
     }
 
+    /// The fixture is deliberately in the provider's order, not sorted order — if the
+    /// input were already sorted this test would pass whether or not `models()` sorts.
     @Test("Model IDs come back sorted")
     func models() async throws {
         let rewriter = CloudRewriter(
             provider: .anthropic,
             key: "sk-test",
             transport: transport(body: """
-            {"data":[{"id":"claude-haiku-4-5"},{"id":"claude-opus-5"}]}
+            {"data":[{"id":"claude-opus-5"},{"id":"claude-haiku-4-5"}]}
             """)
         )
         #expect(try await rewriter.models() == ["claude-haiku-4-5", "claude-opus-5"])
@@ -1548,8 +1610,11 @@ enum Keychain {
     /// less code than the `SecItemUpdate` branch.
     @discardableResult
     static func save(_ value: String, account: String) -> Bool {
-        delete(account: account)
+        // Encode BEFORE deleting. The other order destroys the stored key and then
+        // returns false, which a caller reads as "nothing changed" — the one outcome
+        // a secret store must never produce.
         guard let data = value.data(using: .utf8) else { return false }
+        delete(account: account)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
