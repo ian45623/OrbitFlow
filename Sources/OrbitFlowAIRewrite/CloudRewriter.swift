@@ -34,6 +34,16 @@ public enum RewriteFailure: Error, Equatable {
 /// The transport is injected so the entire path is testable without a network. The
 /// default is `URLSession.shared`.
 public struct CloudRewriter: Sendable {
+    /// How a request is actually sent. Injected so every path here — success, HTTP error,
+    /// timeout, guard rejection — is testable with no network and no mock framework.
+    ///
+    /// **A transport MUST honor Task cancellation.** The timeout is a task-group race, and
+    /// a task group does not return to its caller until every child task has finished —
+    /// including the one that lost. A transport that ignores cancellation therefore makes
+    /// `rewrite` and `models` hang past the timeout no matter what the timeout says, which
+    /// breaks the one guarantee the caller relies on: that this always completes, so a
+    /// stalled network costs the user a fallback rather than the sentence they just spoke.
+    /// The default satisfies this — `URLSession` propagates cancellation to its task.
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     private let provider: AIProvider
@@ -110,7 +120,10 @@ public struct CloudRewriter: Sendable {
                 try await Task.sleep(for: timeout)
                 throw RewriteFailure.timedOut
             }
-            // Whichever finishes first wins; cancel the loser.
+            // Whichever finishes first wins. On this path we cancel the loser explicitly;
+            // on the throwing path the group cancels it implicitly at scope exit. Either
+            // way the loser's own error is discarded, which is what we want — a late
+            // failure from a request we already gave up on is not the user's problem.
             guard let first = try await group.next() else { throw RewriteFailure.timedOut }
             group.cancelAll()
             return first
