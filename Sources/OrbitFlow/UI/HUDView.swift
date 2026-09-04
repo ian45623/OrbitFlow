@@ -85,7 +85,9 @@ struct HUDView: View {
         case .listening: controller.transcript.isEmpty ? "Listening…" : controller.transcript
         // Parakeet transcribes in one pass on release, so there's nothing to show until
         // it lands — say what's happening instead of leaving an empty pill.
-        case .finishing: controller.transcript.isEmpty ? "Transcribing…" : controller.transcript
+        case .finishing:
+            if controller.isRewriting { "Rewriting…" }
+            else { controller.transcript.isEmpty ? "Transcribing…" : controller.transcript }
         case .error(let message): message
         case .idle: ""
         }

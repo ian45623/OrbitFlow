@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowAIRewrite
 import AVFoundation
 import AppKit
 import Foundation
@@ -54,6 +55,10 @@ final class DictationController {
     /// works, the key picker offers choices, and holding the key just does nothing.
     private(set) var isHotkeyArmed = false
 
+    /// True while a cloud round-trip is in flight, so the HUD can say "Rewriting…"
+    /// instead of showing a resolved-but-frozen transcript for up to eight seconds.
+    private(set) var isRewriting = false
+
     private let hotkey = HotkeyMonitor()
     private let capture = AudioCapture()
     private let makeEngine: @Sendable () -> any TranscriptionEngine
@@ -61,12 +66,25 @@ final class DictationController {
     /// Injected only by tests; production reads the setting per-utterance below.
     private let formatter: (any TextFormatter)?
 
-    /// Chosen per-utterance so the menu toggle applies to the very next hold.
+    /// Chosen per-utterance so a tier or mode change applies to the very next hold.
     private var activeFormatter: any TextFormatter {
         if let formatter { return formatter }
-        return Settings.shared.smartCleanup
-            ? FoundationModelFormatter()
-            : RuleBasedFormatter()
+        let settings = Settings.shared
+        switch settings.cleanupTier {
+        case .rules:
+            return RuleBasedFormatter()
+        case .onDevice:
+            return FoundationModelFormatter()
+        case .cloud:
+            // Read on the main actor, here, because CloudFormatter's format() is not
+            // main-actor isolated and Settings is.
+            return CloudFormatter(
+                provider: settings.aiProvider,
+                model: settings.aiModel,
+                key: Keychain.read(account: settings.aiProvider.rawValue) ?? "",
+                mode: settings.rewriteMode
+            )
+        }
     }
 
     private var engine: (any TranscriptionEngine)?
@@ -344,9 +362,14 @@ final class DictationController {
                 return
             }
 
+            // Only the cloud tier is slow enough to need saying out loud; rules are
+            // instant and the on-device pass is bounded at four seconds.
+            isRewriting = Settings.shared.cleanupEnabled
+                && Settings.shared.cleanupTier == .cloud
             let cleaned = Settings.shared.cleanupEnabled
                 ? await activeFormatter.format(raw)
                 : raw
+            isRewriting = false
 
             // The dictionary runs last, and runs regardless of the cleanup setting. Biasing
             // only raises the odds of the right word; this is the pass that guarantees it,

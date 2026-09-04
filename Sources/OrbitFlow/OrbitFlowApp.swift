@@ -248,14 +248,6 @@ private struct MenuContent: View {
 
         Toggle("Clean up text", isOn: $settings.cleanupEnabled)
 
-        if settings.cleanupEnabled {
-            Toggle("Smart cleanup (on-device AI)", isOn: $settings.smartCleanup)
-                .disabled(!FoundationModelFormatter.isAvailable)
-            if let reason = FoundationModelFormatter.unavailableReason {
-                Text(reason).font(.caption)
-            }
-        }
-
         Toggle("Sound", isOn: $settings.soundEnabled)
 
         Divider()

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OrbitFlowAIRewrite
 
 /// Which speech engine transcribes an utterance.
 enum SpeechEngineChoice: String, CaseIterable, Sendable {
@@ -15,6 +16,27 @@ enum SpeechEngineChoice: String, CaseIterable, Sendable {
 
     /// Apple shows text while you talk; Parakeet only resolves on release.
     var showsLiveText: Bool { self == .apple }
+}
+
+/// Which pass cleans a transcript before it's injected.
+///
+/// Replaces the old `smartCleanup` boolean, which could only express two of these three.
+enum CleanupTier: String, CaseIterable, Sendable {
+    /// Deterministic, zero-latency, always available.
+    case rules
+    /// Apple's on-device Foundation Model. Nothing leaves the Mac.
+    case onDevice
+    /// A cloud provider of the user's choosing. Text leaves the Mac — see the note in
+    /// Settings and the privacy section of the README.
+    case cloud
+
+    var displayName: String {
+        switch self {
+        case .rules: "Rules"
+        case .onDevice: "On-device"
+        case .cloud: "Cloud AI"
+        }
+    }
 }
 
 /// How much of the dictation pill to show while you're talking.
@@ -82,9 +104,35 @@ final class Settings {
         didSet { defaults.set(cleanupEnabled, forKey: Keys.cleanupEnabled) }
     }
 
-    /// Use the on-device LLM for cleanup instead of the deterministic rule pass.
-    var smartCleanup: Bool {
-        didSet { defaults.set(smartCleanup, forKey: Keys.smartCleanup) }
+    /// Which cleanup pass runs. Gated by `cleanupEnabled` — off means raw engine output
+    /// whatever this says.
+    var cleanupTier: CleanupTier {
+        didSet { defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier) }
+    }
+
+    /// The tier to return to when the AI rewrite switch is turned off.
+    ///
+    /// Without this, switching the cloud tier off would silently demote a user who had
+    /// chosen on-device cleanup all the way down to rules.
+    var tierBeforeCloud: CleanupTier {
+        didSet { defaults.set(tierBeforeCloud.rawValue, forKey: Keys.tierBeforeCloud) }
+    }
+
+    /// Which cloud provider the rewrite tier calls. The API key lives in the Keychain,
+    /// never here.
+    var aiProvider: AIProvider {
+        didSet { defaults.set(aiProvider.rawValue, forKey: Keys.aiProvider) }
+    }
+
+    /// Free text, because the model list is fetched from the provider and a provider may
+    /// serve a model our parsing missed.
+    var aiModel: String {
+        didSet { defaults.set(aiModel, forKey: Keys.aiModel) }
+    }
+
+    /// The tone the cloud tier rewrites into.
+    var rewriteMode: RewriteMode {
+        didSet { defaults.set(rewriteMode.rawValue, forKey: Keys.rewriteMode) }
     }
 
     /// How much the floating dictation pill shows.
@@ -104,7 +152,13 @@ final class Settings {
         static let cleanupEnabled = "cleanupEnabled"
         static let soundEnabled = "soundEnabled"
         static let engine = "engine"
-        static let smartCleanup = "smartCleanup"
+        /// Read once, never written: migrated into `cleanupTier` in `init`.
+        static let legacySmartCleanup = "smartCleanup"
+        static let cleanupTier = "cleanupTier"
+        static let tierBeforeCloud = "tierBeforeCloud"
+        static let aiProvider = "aiProvider"
+        static let aiModel = "aiModel"
+        static let rewriteMode = "rewriteMode"
         static let compareMode = "compareMode"
         static let hudSize = "hudSize"
     }
@@ -115,7 +169,29 @@ final class Settings {
         // Apple by default: no download, no dependency, live text while speaking.
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true
-        smartCleanup = defaults.object(forKey: Keys.smartCleanup) as? Bool ?? false
+        // Migrate the old boolean exactly once: after the first launch on this build,
+        // `cleanupTier` is present and this branch never runs again. Note that no user
+        // can land on `.cloud` by migration — that requires an explicit opt-in.
+        if let raw = defaults.string(forKey: Keys.cleanupTier),
+           let tier = CleanupTier(rawValue: raw) {
+            cleanupTier = tier
+        } else {
+            let wasSmart = defaults.object(forKey: Keys.legacySmartCleanup) as? Bool ?? false
+            cleanupTier = wasSmart ? .onDevice : .rules
+        }
+
+        tierBeforeCloud = CleanupTier(
+            rawValue: defaults.string(forKey: Keys.tierBeforeCloud) ?? ""
+        ) ?? .rules
+        aiProvider = AIProvider(
+            rawValue: defaults.string(forKey: Keys.aiProvider) ?? ""
+        ) ?? .anthropic
+        aiModel = defaults.string(forKey: Keys.aiModel) ?? AIProvider.anthropic.defaultModel
+        // Faithful by default, so switching the tier on can't change the user's words
+        // until they ask it to.
+        rewriteMode = RewriteMode(
+            rawValue: defaults.string(forKey: Keys.rewriteMode) ?? ""
+        ) ?? .faithful
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
