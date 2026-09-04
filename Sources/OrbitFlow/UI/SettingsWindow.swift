@@ -131,6 +131,12 @@ struct SettingsPanel: View {
                     keyDraft = ""
                     settings.aiModel = settings.aiProvider.defaultModel
                     refreshKeyPresence()
+                    // Same reasoning as removeKey: a cloud tier with no key for the
+                    // selected provider falls back on every single utterance, so don't
+                    // leave it armed just because it was armed for the previous one.
+                    if settings.cleanupTier == .cloud, !hasStoredKey {
+                        settings.cleanupTier = settings.tierBeforeCloud
+                    }
                 }
 
                 group("When you close the window") {
@@ -229,21 +235,30 @@ struct SettingsPanel: View {
         isTesting = true
         testResult = nil
         Task {
+            let result: TestResult
+            var ids: [String] = []
             do {
-                let ids = try await CloudRewriter(provider: provider, key: key).models()
+                ids = try await CloudRewriter(provider: provider, key: key).models()
+                result = .success(count: ids.count)
+            } catch let failure as RewriteFailure {
+                result = .failure(failure.summary)
+            } catch {
+                result = .failure(error.localizedDescription)
+            }
+            isTesting = false
+            // The user can switch providers while this is in flight. Results belonging to
+            // a provider they are no longer looking at must not be shown under the new
+            // one's name — drop them instead.
+            guard provider == settings.aiProvider else { return }
+            if case .success = result {
                 availableModels = ids
                 if settings.aiModel.isEmpty {
                     settings.aiModel = provider.defaultModel.isEmpty
                         ? (ids.first ?? "")
                         : provider.defaultModel
                 }
-                testResult = .success(count: ids.count)
-            } catch let failure as RewriteFailure {
-                testResult = .failure(failure.summary)
-            } catch {
-                testResult = .failure(error.localizedDescription)
             }
-            isTesting = false
+            testResult = result
         }
     }
 
@@ -253,10 +268,14 @@ struct SettingsPanel: View {
     private var providerControls: some View {
         VStack(alignment: .leading, spacing: DS.Space.base) {
             FieldLabel(text: "Provider", color: DS.Color.ink, emphasis: true)
-            Segmented(
-                options: AIProvider.allCases.map { ($0, $0.displayName) },
-                selection: $settings.aiProvider
-            )
+            // A menu rather than a Segmented: five options do not fit the 520pt measure,
+            // and this matches the Model picker directly below it.
+            Picker("", selection: $settings.aiProvider) {
+                ForEach(AIProvider.allCases, id: \.self) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .labelsHidden()
 
             VStack(alignment: .leading, spacing: DS.Space.tight) {
                 FieldLabel(text: "API key")
@@ -299,28 +318,19 @@ struct SettingsPanel: View {
             }
 
             VStack(alignment: .leading, spacing: DS.Space.tight) {
-                FieldLabel(text: "Model")
                 if availableModels.isEmpty {
-                    TextField(
-                        settings.aiProvider.defaultModel.isEmpty
+                    EntryField(
+                        label: "Model",
+                        text: $settings.aiModel,
+                        prompt: settings.aiProvider.defaultModel.isEmpty
                             ? "Press Test to load models"
-                            : settings.aiProvider.defaultModel,
-                        text: $settings.aiModel
-                    )
-                    .textFieldStyle(.plain)
-                    .font(DS.Font.body)
-                    .foregroundStyle(DS.Color.ink)
-                    .padding(.horizontal, DS.Space.base)
-                    .padding(.vertical, DS.Space.snug)
-                    .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.Radius.control)
-                            .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+                            : settings.aiProvider.defaultModel
                     )
                 } else {
-                    // A picker over what the provider actually serves, plus free text —
-                    // a provider may serve a model our parsing missed, and the user
-                    // shouldn't be blocked on that.
+                    FieldLabel(text: "Model")
+                    // A picker over what the provider actually serves. Free text returns
+                    // whenever the list is empty, so a model our parsing missed is still
+                    // reachable.
                     Picker("", selection: $settings.aiModel) {
                         ForEach(availableModels, id: \.self) { Text($0).tag($0) }
                     }
