@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import OrbitFlowAIRewrite
 
 @main
 struct OrbitFlowApp: App {
@@ -233,6 +234,16 @@ private struct MenuContent: View {
         )) {
             ForEach(PushToTalkKey.allCases, id: \.self) { key in
                 Text(key.displayName).tag(key)
+            }
+        }
+
+        // Only meaningful when the cloud tier is on; hidden otherwise rather than shown
+        // disabled, because a mode that changes nothing is worse than no mode at all.
+        if settings.cleanupTier == .cloud {
+            Picker("Rewrite mode", selection: $settings.rewriteMode) {
+                ForEach(RewriteMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
             }
         }
 

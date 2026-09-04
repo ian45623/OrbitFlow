@@ -1,7 +1,8 @@
 # Orbit Flow
 
 Push-to-talk dictation for macOS. Hold a key, talk, release — cleaned-up text lands in
-whatever text field has focus. A Wispr Flow-shaped app, built native and fully on-device.
+whatever text field has focus. A Wispr Flow-shaped app, built native and on-device by
+default — with one opt-in tier that isn't. See "Cloud AI rewrite" below.
 
 **Status:** working skeleton. Builds, launches, arms the hotkey, transcribes, injects.
 Branding and the LLM cleanup tier are the next passes.
@@ -156,6 +157,45 @@ change.
 | English accuracy | good | best | good |
 | Languages | many | 25 | 99 |
 | Latency | low | ~80 ms | 200–500 ms |
+
+---
+
+## Cloud AI rewrite
+
+**Off by default.** Everything else in this app runs on your Mac. This one tier does not,
+which is why it's opt-in, why the switch stays disabled until you've saved a key, and why
+the default mode changes nothing about your wording.
+
+Turn it on in Settings ▸ Cleanup and the transcript of each dictation is sent to a provider
+you choose — Anthropic, OpenAI, OpenRouter, Gemini, or DeepSeek — using **your own API key**,
+and comes back rewritten.
+
+| | |
+|---|---|
+| **What is sent** | The transcript text and the mode instruction. Nothing else. |
+| **What is never sent** | Audio. Your recordings never leave the Mac under any setting. |
+| **Where the key lives** | The macOS Keychain, not `UserDefaults`, and not synced to iCloud. One key per provider. |
+| **Who is billed** | You are, by your provider, at their rates. |
+| **If it fails** | The rule-based cleanup runs instead and your text still pastes. A network problem never costs you an utterance. |
+
+### Modes
+
+| Mode | What it does |
+|---|---|
+| **Faithful** | Cleans up what you said and leaves your wording alone. The default. |
+| **Casual** | Relaxed and conversational, the way you'd write to a colleague you know well. |
+| **Professional** | Clear business English. No slang, no filler, no padding. |
+| **Problem-solver** | Professional and polite, framed as a proposal. Won't invent a solution you didn't say. |
+
+Switch modes from the menu bar without opening Settings.
+
+**One limitation worth knowing.** Every mode's prompt tells the model that a dictated
+question stays a question rather than something to answer. In Faithful mode there's also a
+programmatic check that refuses any output containing words you didn't say — which is what
+catches the classic failure where you dictate "what's the capital of France" and get "The
+capital of France is Paris." typed into your document. That check **cannot** apply to the
+rewriting modes, because introducing words is exactly what they're for. If you dictate
+questions a lot, Faithful is the safer mode.
 
 ---
 
