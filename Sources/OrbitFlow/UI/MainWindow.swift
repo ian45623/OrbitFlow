@@ -11,7 +11,10 @@ import SwiftUI
 struct MainWindow: View {
     @Bindable var controller: DictationController
 
-    @State private var section: Section = .transcriptions
+    /// Which tab is showing lives on `MainRoute` now, not private `@State` — the Services
+    /// menu's "Open in Orbit Flow" has to be able to force this window onto Transcriptions
+    /// from outside the view, and `@State` can't be reached from there.
+    @Bindable private var route = MainRoute.shared
 
     enum Section: String, CaseIterable, Identifiable {
         case transcriptions
@@ -31,9 +34,9 @@ struct MainWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Header(controller: controller, section: $section)
+            Header(controller: controller, section: $route.section)
 
-            switch section {
+            switch route.section {
             case .transcriptions: TranscriptionList()
             case .dictionary: DictionaryPanel()
             case .settings: SettingsPanel(controller: controller)

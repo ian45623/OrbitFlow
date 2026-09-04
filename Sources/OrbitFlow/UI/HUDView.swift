@@ -11,7 +11,12 @@ struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
 
-    private var hud: HUDSize { settings.hudSize }
+    // A notice — or an on-demand rewrite running with no dictation behind it — borrows
+    // Full's size regardless of the setting: Compact's 104×26 pill was sized for a
+    // waveform, and the on-demand path's messages are the feature's only feedback
+    // channel. `HUDPanel` makes the identical decision for the window itself, so the
+    // NSPanel's bounds and what SwiftUI draws inside it never disagree.
+    private var hud: HUDSize { controller.needsFullHUD ? .full : settings.hudSize }
     private var isListening: Bool { controller.state.isActive }
 
     var body: some View {

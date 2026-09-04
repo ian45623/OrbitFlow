@@ -66,6 +66,18 @@ final class DictationController {
     /// HUD is already a non-activating panel, so it is the one surface that qualifies.
     private(set) var notice: String?
 
+    /// Whether the pill needs full width right now regardless of the Compact setting.
+    ///
+    /// A notice — a refusal, a failure, "also copied to clipboard" — is the on-demand
+    /// path's only feedback channel, and Compact's 104×26 was sized for a waveform, not a
+    /// sentence. `HUDView` (the label) and `HUDPanel` (the window's actual size) both read
+    /// this, so the two can never disagree about how big the pill is.
+    var needsFullHUD: Bool {
+        if notice != nil { return true }
+        if case .idle = state, isRewriting { return true }
+        return false
+    }
+
     private let hotkey = HotkeyMonitor()
     private let capture = AudioCapture()
     private let makeEngine: @Sendable () -> any TranscriptionEngine
@@ -124,6 +136,10 @@ final class DictationController {
     /// paste. So the tail re-checks this token before it writes anything, and discarding
     /// simply issues a new one.
     private var runToken = UUID()
+
+    /// Identifies the notice currently on screen, so `flash` can tell "my message is
+    /// still showing" from "a message with identical text showed up after mine."
+    private var noticeToken = UUID()
 
     private var holdStarted: Date?
     private var releasedAt: Date?
@@ -243,13 +259,16 @@ final class DictationController {
     /// Shows `message` in the pill for three seconds.
     ///
     /// The token check matters: two rewrites in quick succession would otherwise have the
-    /// first one's timer clear the second one's message three seconds early.
+    /// first one's timer clear the second one's message three seconds early — including
+    /// two identical messages in a row, which is why this compares a token and not the
+    /// text.
     func flash(_ message: String) {
         notice = message
-        let shown = message
+        noticeToken = UUID()
+        let token = noticeToken
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
-            if notice == shown { notice = nil }
+            if noticeToken == token { notice = nil }
         }
     }
 
