@@ -96,19 +96,30 @@ struct SettingsPanel: View {
                     Toggle(isOn: aiRewriteBinding) {
                         Text("AI rewrite")
                             .font(DS.Font.body)
-                            .foregroundStyle(hasStoredKey ? DS.Color.ink : DS.Color.inkFaint)
+                            .foregroundStyle(
+                                hasStoredKey && !settings.aiModel.isEmpty
+                                    ? DS.Color.ink : DS.Color.inkFaint
+                            )
                     }
                     .toggleStyle(.switch)
-                    .disabled(!hasStoredKey)
+                    .disabled(!hasStoredKey || settings.aiModel.isEmpty)
 
-                    if hasStoredKey {
+                    if hasStoredKey, !settings.aiModel.isEmpty {
                         // Say plainly what turning this on does. The app's whole pitch is
                         // that it runs on your Mac; this is the one feature that doesn't.
                         note("Sends each transcript to \(settings.aiProvider.displayName) to be "
                             + "rewritten. Your text leaves this Mac.")
-                    } else {
+                    } else if !hasStoredKey {
                         note("Save an API key below to turn this on. Without one, every "
                             + "dictation would silently fall back to the rule-based pass.")
+                    } else {
+                        note("Press Test to pick a model. Without one, every dictation "
+                            + "would silently fall back to the rule-based pass.")
+                    }
+
+                    if settings.cleanupTier == .cloud, !settings.cleanupEnabled {
+                        note("\"Clean up transcripts\" is off, so nothing is being rewritten "
+                            + "right now. Turn it back on to use AI rewrite.")
                     }
 
                     providerControls
@@ -208,7 +219,14 @@ struct SettingsPanel: View {
     private func saveKey() {
         let key = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        _ = Keychain.save(key, account: settings.aiProvider.rawValue)
+        guard Keychain.save(key, account: settings.aiProvider.rawValue) else {
+            // Do not clear the draft — the user would lose what they typed with nothing
+            // stored, and the row below would claim a key is saved because the previous
+            // item is still there.
+            testResult = .failure("Couldn't save the key to the Keychain. Unlock your "
+                + "login keychain and try again.")
+            return
+        }
         keyDraft = ""
         testResult = nil
         refreshKeyPresence()

@@ -183,10 +183,14 @@ final class Settings {
         tierBeforeCloud = CleanupTier(
             rawValue: defaults.string(forKey: Keys.tierBeforeCloud) ?? ""
         ) ?? .rules
-        aiProvider = AIProvider(
+        // Resolved into a local first: `aiProvider` is an @Observable-backed computed
+        // property, and reading it back via `self.aiProvider` here — before every stored
+        // property finishes initializing — is a compile error, not just bad style.
+        let resolvedProvider = AIProvider(
             rawValue: defaults.string(forKey: Keys.aiProvider) ?? ""
         ) ?? .anthropic
-        aiModel = defaults.string(forKey: Keys.aiModel) ?? AIProvider.anthropic.defaultModel
+        aiProvider = resolvedProvider
+        aiModel = defaults.string(forKey: Keys.aiModel) ?? resolvedProvider.defaultModel
         // Faithful by default, so switching the tier on can't change the user's words
         // until they ask it to.
         rewriteMode = RewriteMode(

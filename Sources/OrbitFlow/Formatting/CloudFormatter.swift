@@ -35,7 +35,7 @@ struct CloudFormatter: TextFormatter {
         } catch let failure as RewriteFailure {
             // `summary` never contains the key — see RewriteFailure.
             Log.speech.info(
-                "cloud rewrite failed (\(failure.summary, privacy: .public)) — falling back"
+                "cloud rewrite failed (\(failure.summary, privacy: .private)) — falling back"
             )
             return await fallback.format(trimmed)
         } catch {
