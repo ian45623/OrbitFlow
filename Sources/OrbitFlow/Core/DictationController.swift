@@ -423,8 +423,10 @@ final class DictationController {
 
     private func beginDictation() {
         guard case .idle = state else { return }
-        // Before the microphone opens, or it transcribes the voice reading aloud.
-        stopReadingAloud()
+        // An offer is a guess about what the user wants next, and this press says otherwise.
+        // Speech is left alone until just before capture — see there.
+        offerToken = UUID()
+        readAloudOffer = nil
         isLatched = false
         runToken = UUID()
         state = .starting
@@ -479,6 +481,13 @@ final class DictationController {
                     return recording
                 }
 
+                // Before the microphone opens, or it transcribes the voice reading aloud.
+                // Not at the top of `beginDictation`: a lone-modifier talk key goes down as
+                // the first half of every chord that uses it (⌥-characters, ⌃-shortcuts), and
+                // `hotkeyChorded` throws that dictation away — but stopped speech would
+                // already be gone. Waiting for the engine to spin up gives the chord's other
+                // key time to arrive and move the state off `.starting`.
+                if case .starting = self.state { Speaker.shared.stop() }
                 try capture.start(
                     outputFormat: format,
                     onBuffer: { chunk in
