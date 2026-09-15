@@ -6,7 +6,8 @@ import SwiftUI
 /// floating over whatever you're really working in. A dark capsule with two discs: discard
 /// on the left, confirm on the right, the level trace between them. Two sizes, because that
 /// trade is a real preference and not a default — **compact** only confirms it's hearing
-/// you, **full** also shows the transcript as it resolves.
+/// you, **full** also shows the transcript as it resolves. When read aloud offers highlighted
+/// text, or anything is being spoken, the same capsule shows ✕, the text, and ▶ or ■ instead.
 struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
@@ -49,7 +50,15 @@ struct HUDView: View {
 
     @ViewBuilder
     private var dictationControls: some View {
-        HUDButton(kind: .discard, size: hud.controlSize) { controller.discard() }
+        // A notice can cover speech that is still playing, and then there is no recording
+        // for ✕ to discard — only the voice to stop.
+        HUDButton(kind: .discard, size: hud.controlSize) {
+            if controller.state.isActive {
+                controller.discard()
+            } else {
+                controller.stopReadingAloud()
+            }
+        }
 
         Waveform(
             level: controller.level,

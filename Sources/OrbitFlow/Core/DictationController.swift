@@ -200,22 +200,23 @@ final class DictationController {
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
         hotkey.onRelease = { [weak self] in self?.hotkeyReleased() }
         hotkey.onChord = { [weak self] in self?.hotkeyChorded() }
-        // Escape does exactly what the pill's ✕ does. `discard()` already ignores a call
-        // when nothing is running, but the swallow decision needs the answer up front:
-        // Escape must reach the app underneath whenever there's no recording to cancel.
         hotkey.onMouseUp = { [weak self] in self?.mouseReleased() }
-        // Escape is also the keyboard ✕ for read aloud. Still swallowed only when there is
-        // something of ours to cancel.
+        // Escape does what the pill's ✕ does, but the swallow decision needs the answer up
+        // front: Escape must reach the app underneath unless it cancelled a recording or
+        // silenced speech. An offer on its own is cleared and the key still goes through —
+        // text selected in a dialog or search field is exactly where Escape means something
+        // to that app, and the offer is one the user may not even have looked at.
         hotkey.onEscape = { [weak self] in
             guard let self else { return false }
             if self.state.isActive {
                 self.discard()
                 return true
             }
-            if self.isReadAloudShowing {
+            if Speaker.shared.isSpeaking {
                 self.stopReadingAloud()
                 return true
             }
+            if self.readAloudOffer != nil { self.stopReadingAloud() }
             return false
         }
         isHotkeyArmed = hotkey.start()

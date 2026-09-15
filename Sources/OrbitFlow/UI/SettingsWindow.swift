@@ -405,9 +405,10 @@ struct SettingsPanel: View {
             FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
             let voices = readAloudVoices
             Picker("", selection: Binding(
-                // A saved voice that has since been uninstalled has no row to select, and
-                // a picker with no selection shows blank. It already speaks as the system
-                // default, so say so.
+                // A saved voice outside the listed rows — uninstalled since, another
+                // language, a novelty voice — has no row to select, and a picker with no
+                // selection shows blank, so it shows as "System default". Only the
+                // uninstalled one really speaks as the default.
                 get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
                 set: { settings.readAloudVoice = $0 }
             )) {

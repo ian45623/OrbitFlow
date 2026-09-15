@@ -30,7 +30,8 @@ final class HotkeyMonitor {
     /// Escape was pressed. Return `true` to swallow it, `false` to let it through.
     ///
     /// The decision belongs to the caller, not here, and it matters: Escape is swallowed
-    /// **only** when there is a recording to throw away. Consuming it unconditionally would
+    /// **only** when it stops something of ours — a recording to throw away, or speech being
+    /// read aloud. Consuming it unconditionally would
     /// break dismissing a dialog, leaving a vim insert mode, or clearing a search field in
     /// every app on the machine, for the entire time Orbit Flow is running.
     var onEscape: (() -> Bool)?
@@ -146,7 +147,7 @@ final class HotkeyMonitor {
                 return true
             }
 
-            // Escape cancels an in-flight dictation, and is swallowed only if there was one.
+            // Escape cancels a dictation or stops speech, and is swallowed only if it did.
             guard keyCode == Int64(kVK_Escape) else { return false }
             return onEscape?() ?? false
 

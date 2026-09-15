@@ -25,7 +25,7 @@ final class HUDPanel: NSPanel {
     }
 
     /// Read in `present()` to decide whether this pill needs to be full-sized for a
-    /// notice. Stored rather than reaching for a shared singleton so the panel doesn't
+    /// notice or read aloud. Stored rather than reaching for a shared singleton so the panel doesn't
     /// need to know how the controller it was handed relates to anything else.
     private let controller: DictationController
 
@@ -43,7 +43,8 @@ final class HUDPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
-        // The pill carries a discard and a confirm button, so it has to receive clicks.
+        // The pill carries buttons — discard and confirm, or ✕ and ▶/■ while reading aloud —
+        // so it has to receive clicks.
         // This is safe only because `canBecomeKey` is false: a non-activating panel takes
         // the click without activating the app, so the text field you were typing in keeps
         // focus and `TextInjector` still has somewhere to insert.
