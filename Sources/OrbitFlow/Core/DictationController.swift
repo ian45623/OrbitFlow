@@ -67,6 +67,19 @@ final class DictationController {
     /// HUD is already a non-activating panel, so it is the one surface that qualifies.
     private(set) var notice: String?
 
+    /// Highlighted text the pill is offering to read aloud, or nil.
+    ///
+    /// Cleared the moment ▶ is pressed: from then on the pill shows `Speaker.shared.text`,
+    /// which is what is actually being spoken. Keeping the two apart is what lets a new
+    /// highlight be offered while the previous one is still being read.
+    private(set) var readAloudOffer: String?
+
+    /// Whether the pill is in read-aloud mode: something offered, or something being read —
+    /// from the pill, the History page, or the Settings preview.
+    var isReadAloudShowing: Bool {
+        readAloudOffer != nil || Speaker.shared.isSpeaking
+    }
+
     /// Whether the pill needs full width right now regardless of the Compact setting.
     ///
     /// A notice — a refusal, a failure, "also copied to clipboard" — is the on-demand
@@ -76,6 +89,12 @@ final class DictationController {
     var needsFullHUD: Bool {
         if notice != nil { return true }
         if case .idle = state, isRewriting { return true }
+        // An offer is only useful if you can see what it's offering, and Compact has no
+        // room for a word of it. Ignored while a dictation is active: the pill belongs to
+        // the recording then (`HUDView.isReadingAloud` already hides the read-aloud
+        // controls), so speech started elsewhere must not resize a Compact pill out from
+        // under it.
+        if isReadAloudShowing, !state.isActive { return true }
         return false
     }
 
@@ -142,6 +161,20 @@ final class DictationController {
     /// still showing" from "a message with identical text showed up after mine."
     private var noticeToken = UUID()
 
+    /// The last selection offered, so the pill's own ▶ — a mouse-up made while the
+    /// selection is still there — doesn't re-offer it. Cleared by a mouse-up that finds no
+    /// selection, so deselecting and re-selecting the same passage offers it again.
+    private var lastOfferedSelection: String?
+
+    /// Identifies the offer on screen, for the same reason `noticeToken` exists: an old
+    /// offer's fade timer must not clear a newer one.
+    private var offerToken = UUID()
+
+    /// Identifies the latest mouse-up. Selection reads finish in whatever order the apps
+    /// answer, so a slow read from an earlier click must not offer — or un-remember — a
+    /// selection that a later click has already replaced.
+    private var mouseUpToken = UUID()
+
     private var holdStarted: Date?
     private var releasedAt: Date?
     private var engineName = ""
@@ -167,13 +200,24 @@ final class DictationController {
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
         hotkey.onRelease = { [weak self] in self?.hotkeyReleased() }
         hotkey.onChord = { [weak self] in self?.hotkeyChorded() }
-        // Escape does exactly what the pill's ✕ does. `discard()` already ignores a call
-        // when nothing is running, but the swallow decision needs the answer up front:
-        // Escape must reach the app underneath whenever there's no recording to cancel.
+        hotkey.onMouseUp = { [weak self] in self?.mouseReleased() }
+        // Escape does what the pill's ✕ does, but the swallow decision needs the answer up
+        // front: Escape must reach the app underneath unless it cancelled a recording or
+        // silenced speech. An offer on its own is cleared and the key still goes through —
+        // text selected in a dialog or search field is exactly where Escape means something
+        // to that app, and the offer is one the user may not even have looked at.
         hotkey.onEscape = { [weak self] in
-            guard let self, self.state.isActive else { return false }
-            self.discard()
-            return true
+            guard let self else { return false }
+            if self.state.isActive {
+                self.discard()
+                return true
+            }
+            if Speaker.shared.isSpeaking {
+                self.stopReadingAloud()
+                return true
+            }
+            if self.readAloudOffer != nil { self.stopReadingAloud() }
+            return false
         }
         isHotkeyArmed = hotkey.start()
         return isHotkeyArmed
@@ -279,6 +323,9 @@ final class DictationController {
     /// two identical messages in a row, which is why this compares a token and not the
     /// text.
     func flash(_ message: String) {
+        // A notice is feedback for something the user just did; an offer is a guess about
+        // what they might want. The notice wins.
+        readAloudOffer = nil
         notice = message
         noticeToken = UUID()
         let token = noticeToken
@@ -293,14 +340,94 @@ final class DictationController {
     /// Separate from the private `isRewriting` writes in `endDictation`, which are gated on
     /// the dictation run token and must stay that way.
     func setRewriting(_ running: Bool) {
-        if running { notice = nil }
+        if running {
+            notice = nil
+            readAloudOffer = nil
+        }
         isRewriting = running
+    }
+
+    // MARK: - Read aloud
+
+    /// ▶ on the pill: file the offered text in History, then read it.
+    ///
+    /// Filed only here, never on highlight. Selecting text is constant — to delete it, drag
+    /// it, copy an address — and History should hold what the user chose to hear.
+    func readAloud() {
+        guard let text = readAloudOffer else { return }
+        offerToken = UUID()
+        readAloudOffer = nil
+        RunLog.record(
+            DictationRun(
+                date: Date(),
+                engine: "Read aloud",
+                audioSeconds: 0,
+                processSeconds: 0,
+                text: text
+            )
+        )
+        Speaker.shared.speak(text)
+    }
+
+    /// ✕, ■ and Escape: stop speaking and drop any offer.
+    func stopReadingAloud() {
+        offerToken = UUID()
+        readAloudOffer = nil
+        Speaker.shared.stop()
+    }
+
+    private func mouseReleased() {
+        guard Settings.shared.readAloudEnabled else { return }
+        mouseUpToken = UUID()
+        let token = mouseUpToken
+        Task { @MainActor in
+            // The tap sees the mouse-up before the app under the cursor has handled it, so
+            // the selection isn't final yet at this instant.
+            try? await Task.sleep(for: .milliseconds(50))
+            // A click that came in during the wait has its own read coming.
+            guard mouseUpToken == token else { return }
+
+            let pid = SelectedText.frontmostAppPID()
+            let read = await Task.detached(priority: .userInitiated) {
+                pid.flatMap { SelectedText.read(pid: $0) }
+            }.value
+            guard mouseUpToken == token else { return }
+
+            guard let text = read else {
+                lastOfferedSelection = nil
+                return
+            }
+            guard shouldOfferReadAloud(
+                text: text,
+                lastOffered: lastOfferedSelection,
+                enabled: Settings.shared.readAloudEnabled,
+                isBusy: state.isActive || isRewriting || notice != nil
+            ) else { return }
+
+            offerReadAloud(text)
+        }
+    }
+
+    /// Shows ▶ for `text`, fading after four seconds if it isn't pressed.
+    private func offerReadAloud(_ text: String) {
+        lastOfferedSelection = text
+        readAloudOffer = text
+        offerToken = UUID()
+        let token = offerToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if offerToken == token { readAloudOffer = nil }
+        }
     }
 
     // MARK: - Dictation
 
     private func beginDictation() {
         guard case .idle = state else { return }
+        // An offer is a guess about what the user wants next, and this press says otherwise.
+        // Speech is left alone until just before capture — see there.
+        offerToken = UUID()
+        readAloudOffer = nil
         isLatched = false
         runToken = UUID()
         state = .starting
@@ -355,6 +482,13 @@ final class DictationController {
                     return recording
                 }
 
+                // Before the microphone opens, or it transcribes the voice reading aloud.
+                // Not at the top of `beginDictation`: a lone-modifier talk key goes down as
+                // the first half of every chord that uses it (⌥-characters, ⌃-shortcuts), and
+                // `hotkeyChorded` throws that dictation away — but stopped speech would
+                // already be gone. Waiting for the engine to spin up gives the chord's other
+                // key time to arrive and move the state off `.starting`.
+                if case .starting = self.state { Speaker.shared.stop() }
                 try capture.start(
                     outputFormat: format,
                     onBuffer: { chunk in

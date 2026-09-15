@@ -6,10 +6,12 @@ import SwiftUI
 /// floating over whatever you're really working in. A dark capsule with two discs: discard
 /// on the left, confirm on the right, the level trace between them. Two sizes, because that
 /// trade is a real preference and not a default — **compact** only confirms it's hearing
-/// you, **full** also shows the transcript as it resolves.
+/// you, **full** also shows the transcript as it resolves. When read aloud offers highlighted
+/// text, or anything is being spoken, the same capsule shows ✕, the text, and ▶ or ■ instead.
 struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
+    @State private var speaker = Speaker.shared
 
     // A notice — or an on-demand rewrite running with no dictation behind it — borrows
     // Full's size regardless of the setting: Compact's 104×26 pill was sized for a
@@ -21,26 +23,7 @@ struct HUDView: View {
 
     var body: some View {
         HStack(spacing: DS.Space.snug) {
-            HUDButton(kind: .discard, size: hud.controlSize) { controller.discard() }
-
-            Waveform(
-                level: controller.level,
-                isActive: isListening,
-                color: isError ? DS.Color.caution : DS.Color.inkOnHUD
-            )
-            .frame(width: hud.waveWidth)
-
-            if hud == .full {
-                Text(label)
-                    .font(hasTranscript ? DS.Font.prose : DS.Font.body)
-                    .foregroundStyle(textColor)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .animation(DS.Motion.press, value: controller.transcript)
-            }
-
-            HUDButton(kind: .confirm, size: hud.controlSize) { controller.stopAndInsert() }
+            if isReadingAloud { readAloudControls } else { dictationControls }
         }
         .padding(.horizontal, DS.Space.tight)
         .frame(width: hud.pillSize.width, height: hud.pillSize.height)
@@ -63,6 +46,68 @@ struct HUDView: View {
         // The panel is larger than the pill by exactly this much on every side, so the
         // shadow has somewhere to fade out instead of being clipped square at the corners.
         .padding(HUDPanel.shadowMargin)
+    }
+
+    @ViewBuilder
+    private var dictationControls: some View {
+        // A notice can cover speech that is still playing, and then there is no recording
+        // for ✕ to discard — only the voice to stop.
+        HUDButton(kind: .discard, size: hud.controlSize) {
+            if controller.state.isActive {
+                controller.discard()
+            } else {
+                controller.stopReadingAloud()
+            }
+        }
+
+        Waveform(
+            level: controller.level,
+            isActive: isListening,
+            color: isError ? DS.Color.caution : DS.Color.inkOnHUD
+        )
+        .frame(width: hud.waveWidth)
+
+        if hud == .full {
+            Text(label)
+                .font(hasTranscript ? DS.Font.prose : DS.Font.body)
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(DS.Motion.press, value: controller.transcript)
+        }
+
+        HUDButton(kind: .confirm, size: hud.controlSize) { controller.stopAndInsert() }
+    }
+
+    /// ✕, the text, and ▶ for an offer or ■ while reading. No waveform: there's no
+    /// microphone level to draw, and a flat trace next to a voice reads as broken.
+    @ViewBuilder
+    private var readAloudControls: some View {
+        HUDButton(kind: .discard, size: hud.controlSize, help: "Stop and dismiss") {
+            controller.stopReadingAloud()
+        }
+
+        // Tail-truncated, unlike the transcript: what matters here is where the passage
+        // starts, so you can tell which one you highlighted.
+        Text(controller.readAloudOffer ?? speaker.text ?? "")
+            .font(DS.Font.prose)
+            .foregroundStyle(DS.Color.inkOnHUD)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        if controller.readAloudOffer != nil {
+            HUDButton(kind: .play, size: hud.controlSize) { controller.readAloud() }
+        } else {
+            HUDButton(kind: .stop, size: hud.controlSize) { controller.stopReadingAloud() }
+        }
+    }
+
+    /// Anything the pill already had a job for takes precedence over reading aloud.
+    private var isReadingAloud: Bool {
+        !isListening && controller.notice == nil && !controller.isRewriting
+            && controller.isReadAloudShowing
     }
 
     private var isError: Bool {

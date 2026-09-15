@@ -49,4 +49,11 @@ enum Permissions {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
         NSWorkspace.shared.open(url)
     }
+
+    /// Where system voices are downloaded. Apps cannot download voices themselves, so this
+    /// pane is the only way to get the Premium and Enhanced ones.
+    static func openSpokenContentSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.universalaccess?SpeakableItems")!
+        NSWorkspace.shared.open(url)
+    }
 }

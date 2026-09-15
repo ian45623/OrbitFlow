@@ -383,23 +383,47 @@ struct Waveform: View {
 /// time and throwing the utterance away is the rare escape hatch. Both are the same size:
 /// the difference in weight is carried by fill, not by making one harder to hit.
 struct HUDButton: View {
-    enum Kind { case discard, confirm }
+    enum Kind { case discard, confirm, play, stop }
 
     let kind: Kind
     let size: CGFloat
+    /// Overrides the tooltip, for a kind reused with a different meaning — the read-aloud
+    /// pill's ✕ doesn't discard a recording.
+    var help: String?
     let action: () -> Void
 
     @State private var isHovering = false
 
+    /// The one button on the pill that moves things forward gets the accent disc.
+    private var isPrimary: Bool { kind == .confirm || kind == .play }
+
+    private var glyph: String {
+        switch kind {
+        case .discard: "xmark"
+        case .confirm: "checkmark"
+        case .play: "play.fill"
+        case .stop: "stop.fill"
+        }
+    }
+
+    private var defaultHelp: String {
+        switch kind {
+        case .discard: "Discard this recording"
+        case .confirm: "Stop and paste"
+        case .play: "Read aloud"
+        case .stop: "Stop reading"
+        }
+    }
+
     var body: some View {
         Button(action: action) {
             Circle()
-                .fill(kind == .confirm ? DS.Color.hudConfirm : DS.Color.hudControl)
+                .fill(isPrimary ? DS.Color.hudConfirm : DS.Color.hudControl)
                 .overlay {
-                    Image(systemName: kind == .confirm ? "checkmark" : "xmark")
+                    Image(systemName: glyph)
                         .font(.system(size: size * 0.44, weight: .bold))
                         .foregroundStyle(
-                            kind == .confirm ? DS.Color.hudGlyphOnConfirm : DS.Color.inkOnHUD
+                            isPrimary ? DS.Color.hudGlyphOnConfirm : DS.Color.inkOnHUD
                         )
                 }
                 .frame(width: size, height: size)
@@ -409,7 +433,7 @@ struct HUDButton: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .animation(DS.Motion.press, value: isHovering)
-        .help(kind == .confirm ? "Stop and paste" : "Discard this recording")
+        .help(help ?? defaultHelp)
     }
 }
 

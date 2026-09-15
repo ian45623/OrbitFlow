@@ -21,10 +21,17 @@ final class HotkeyMonitor {
     /// half of a chord like ⌘C. Its release is ignored after this.
     var onChord: (() -> Void)?
 
+    /// The left mouse button came up anywhere on the system — which is when a selection
+    /// made by dragging or double-clicking is finished. Always passed through untouched,
+    /// and nothing about the click is read here: the tap is disabled by macOS if it runs
+    /// slowly, so the selection is looked up afterwards, by the caller.
+    var onMouseUp: (() -> Void)?
+
     /// Escape was pressed. Return `true` to swallow it, `false` to let it through.
     ///
     /// The decision belongs to the caller, not here, and it matters: Escape is swallowed
-    /// **only** when there is a recording to throw away. Consuming it unconditionally would
+    /// **only** when it stops something of ours — a recording to throw away, or speech being
+    /// read aloud. Consuming it unconditionally would
     /// break dismissing a dialog, leaving a vim insert mode, or clearing a search field in
     /// every app on the machine, for the entire time Orbit Flow is running.
     var onEscape: (() -> Bool)?
@@ -37,9 +44,16 @@ final class HotkeyMonitor {
         // `keyDown`/`keyUp` are here for key-combination shortcuts, chord detection and
         // Escape. The tap is handed every key on the system, so `handle` compares the key
         // code against the shortcuts and Escape and nothing else — no key is stored or logged.
-        let mask = (1 << CGEventType.flagsChanged.rawValue)
+        var mask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
+        // `leftMouseUp` is here only while read aloud is on, and is only ever forwarded. This
+        // is an active tap, so every event in the mask waits on this app's main run loop
+        // before reaching its destination — not something to put every click on the system
+        // through for a feature that is off. Settings rebuilds the tap when it's toggled.
+        if Settings.shared.readAloudEnabled {
+            mask |= 1 << CGEventType.leftMouseUp.rawValue
+        }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -133,7 +147,7 @@ final class HotkeyMonitor {
                 return true
             }
 
-            // Escape cancels an in-flight dictation, and is swallowed only if there was one.
+            // Escape cancels a dictation or stops speech, and is swallowed only if it did.
             guard keyCode == Int64(kVK_Escape) else { return false }
             return onEscape?() ?? false
 
@@ -144,6 +158,10 @@ final class HotkeyMonitor {
             pressed.remove(key)
             onRelease?()
             return true
+
+        case .leftMouseUp:
+            onMouseUp?()
+            return false
 
         default:
             return false

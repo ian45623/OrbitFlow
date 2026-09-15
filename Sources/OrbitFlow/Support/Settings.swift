@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
@@ -142,6 +143,26 @@ final class Settings {
         didSet { defaults.set(soundEnabled, forKey: Keys.soundEnabled) }
     }
 
+    /// Offer to read highlighted text aloud from the pill.
+    ///
+    /// Off by default: with it on, the pill appears every time a selection is made with the
+    /// mouse in any app, which is only welcome if you asked for it.
+    var readAloudEnabled: Bool {
+        didSet { defaults.set(readAloudEnabled, forKey: Keys.readAloudEnabled) }
+    }
+
+    /// An `AVSpeechSynthesisVoice` identifier. Nil means the system default voice — and so
+    /// does an identifier whose voice has since been uninstalled, because
+    /// `AVSpeechSynthesisVoice(identifier:)` returns nil for it and the utterance falls back.
+    var readAloudVoice: String? {
+        didSet { defaults.set(readAloudVoice, forKey: Keys.readAloudVoice) }
+    }
+
+    /// `AVSpeechUtterance.rate`, where `AVSpeechUtteranceDefaultSpeechRate` is normal speed.
+    var readAloudRate: Float {
+        didSet { defaults.set(readAloudRate, forKey: Keys.readAloudRate) }
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -164,6 +185,9 @@ final class Settings {
         static let rewriteMode = "rewriteMode"
         static let compareMode = "compareMode"
         static let hudSize = "hudSize"
+        static let readAloudEnabled = "readAloudEnabled"
+        static let readAloudVoice = "readAloudVoice"
+        static let readAloudRate = "readAloudRate"
     }
 
     private init() {
@@ -214,6 +238,13 @@ final class Settings {
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
+        readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false
+        readAloudVoice = defaults.string(forKey: Keys.readAloudVoice)
+        // Through NSNumber, not `as? Float`: UserDefaults hands a stored number back as
+        // NSNumber, and bridging that straight to Float fails for any value it can't
+        // represent exactly — which would silently reset the speed on every launch.
+        readAloudRate = (defaults.object(forKey: Keys.readAloudRate) as? NSNumber)?.floatValue
+            ?? AVSpeechUtteranceDefaultSpeechRate
 
         // `didSet` does not fire during initialization, so without these two writes the
         // migration above would re-run on every launch and a legacy `cloud` string would

@@ -26,7 +26,7 @@ struct MainWindow: View {
 
         var title: String {
             switch self {
-            case .transcriptions: "Transcriptions"
+            case .transcriptions: "History"
             case .dictionary: "Dictionary"
             case .settings: "Settings"
             }
@@ -183,7 +183,7 @@ private struct TranscriptionList: View {
         VStack(spacing: 0) {
             VStack(spacing: DS.Space.snug) {
                 HStack(spacing: DS.Space.snug) {
-                    SearchField(text: $query, placeholder: "Search transcriptions")
+                    SearchField(text: $query, placeholder: "Search history")
                     ActionButton(title: "Add text", systemImage: "plus") {
                         if isComposing { closeComposer() } else { isComposing = true }
                     }

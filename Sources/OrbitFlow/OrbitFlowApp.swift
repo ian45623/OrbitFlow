@@ -185,14 +185,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = controller.state
             _ = controller.notice
             _ = controller.isRewriting
+            _ = controller.readAloudOffer
+            _ = Speaker.shared.isSpeaking
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 // The pill is up for a live dictation, for an on-demand rewrite in flight,
-                // and for the three seconds a notice is on screen.
+                // for the three seconds a notice is on screen, and for as long as there is
+                // something to offer or something being read — from anywhere, so there is
+                // always one place to stop the voice.
                 let wanted = self.controller.state.isActive
                     || self.controller.notice != nil
                     || self.controller.isRewriting
+                    || self.controller.isReadAloudShowing
                 if wanted { self.hud?.present() } else { self.hud?.dismiss() }
                 self.observeState()
             }
