@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
@@ -13,6 +14,7 @@ import OrbitFlowHotkey
 struct SettingsPanel: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
+    @State private var speaker = Speaker.shared
 
     /// Typed into, then saved to the Keychain and cleared. Never populated *from* the
     /// Keychain — the UI shows that a key exists, not what it is.
@@ -92,6 +94,8 @@ struct SettingsPanel: View {
                         + "Escape does the same as ✕ without reaching for the mouse. "
                         + "Takes effect on your next dictation.")
                 }
+
+                readAloudGroup
 
                 group("Cleanup") {
                     Toggle(isOn: $settings.cleanupEnabled) {
@@ -378,6 +382,95 @@ struct SettingsPanel: View {
         self.recordMonitor = nil
         pendingModifier = nil
         controller.reloadHotkey()
+    }
+
+    private var readAloudGroup: some View {
+        group("Read aloud") {
+            // Highlight detection rides on the same event tap as the hotkey, so it is dead
+            // for exactly the same reason.
+            if !controller.isHotkeyArmed { accessibilityNotice }
+
+            Toggle(isOn: $settings.readAloudEnabled) {
+                Text("Offer to read highlighted text")
+                    .font(DS.Font.body)
+                    .foregroundStyle(DS.Color.ink)
+            }
+            .toggleStyle(.switch)
+            note("Highlight text with the mouse in any app and the pill offers ▶. Whatever you "
+                + "play is saved to History. Works in apps that share their selection with "
+                + "macOS — most native apps; some browsers and Electron apps don't.")
+
+            Hairline()
+
+            FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
+            let voices = readAloudVoices
+            Picker("", selection: Binding(
+                // A saved voice that has since been uninstalled has no row to select, and
+                // a picker with no selection shows blank. It already speaks as the system
+                // default, so say so.
+                get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
+                set: { settings.readAloudVoice = $0 }
+            )) {
+                Text("System default").tag(String?.none)
+                ForEach(voices, id: \.identifier) { voice in
+                    Text(voiceLabel(voice)).tag(String?.some(voice.identifier))
+                }
+            }
+            .labelsHidden()
+            note("Premium and Enhanced voices sound far more natural. Download them in System "
+                + "Settings ▸ Accessibility ▸ Spoken Content ▸ System voice ▸ Manage Voices.")
+            ActionButton(title: "Open Spoken Content settings", kind: .quiet) {
+                Permissions.openSpokenContentSettings()
+            }
+
+            Hairline()
+
+            FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
+            HStack(spacing: DS.Space.base) {
+                // Narrower than AVSpeech's full 0…1: the ends of that range are too slow
+                // and too fast to follow, and a slider mostly made of unusable positions is
+                // hard to set.
+                // ponytail: fixed range, widen it if someone asks for faster listening.
+                Slider(value: $settings.readAloudRate, in: 0.3...0.75)
+                ActionButton(title: speaker.isSpeaking ? "Stop" : "Preview", kind: .secondary) {
+                    if speaker.isSpeaking {
+                        speaker.stop()
+                    } else {
+                        speaker.speak("This is how highlighted text will sound.")
+                    }
+                }
+            }
+        }
+        .onChange(of: settings.readAloudEnabled) { _, isOn in
+            if !isOn { controller.stopReadingAloud() }
+        }
+    }
+
+    /// Voices for the user's language, best first. Novelty voices (Bells, Bubbles…) are
+    /// left out, and so are Personal Voices, which need a separate authorization prompt.
+    /// Computed on each redraw rather than cached, so a voice downloaded in System Settings
+    /// shows up when you come back.
+    private var readAloudVoices: [AVSpeechSynthesisVoice] {
+        let language = Locale.current.language.languageCode?.identifier ?? "en"
+        return AVSpeechSynthesisVoice.speechVoices()
+            .filter {
+                $0.language.hasPrefix(language)
+                    && !$0.voiceTraits.contains(.isNoveltyVoice)
+                    && !$0.voiceTraits.contains(.isPersonalVoice)
+            }
+            .sorted {
+                $0.quality.rawValue != $1.quality.rawValue
+                    ? $0.quality.rawValue > $1.quality.rawValue
+                    : $0.name < $1.name
+            }
+    }
+
+    private func voiceLabel(_ voice: AVSpeechSynthesisVoice) -> String {
+        switch voice.quality {
+        case .premium: "\(voice.name) (Premium)"
+        case .enhanced: "\(voice.name) (Enhanced)"
+        default: voice.name
+        }
     }
 
     /// Shown when the event tap isn't live. Without this the app fails silently: the key
