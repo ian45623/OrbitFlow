@@ -82,18 +82,29 @@ final class HUDPanel: NSPanel {
     }
 
     func present() {
+        let hud = controller.needsFullHUD ? HUDSize.full : Settings.shared.hudSize
+        let size = Self.panelSize(for: hud)
+
         // Every active state change (starting → listening → finishing) calls this. Without
         // the early exit the panel would reset to alpha 0 and re-fade on each one, which
-        // reads as a flicker mid-utterance.
-        guard !isVisible || alphaValue < 1 else { return }
+        // reads as a flicker mid-utterance. But read aloud and dictation can hand the pill
+        // to each other while it's already up — a Compact dictation starting while History
+        // speech is showing, or the talk key stopping speech and starting a Compact
+        // dictation in the same pass — so a visible pill whose size no longer matches what
+        // it needs to show still has to resize, just without the fade: only its *arrival*
+        // gets one.
+        guard !isVisible || alphaValue < 1 else {
+            if frame.size != size {
+                setContentSize(size)
+                reposition()
+            }
+            return
+        }
 
         // The pill size is a setting, and this is the only moment it can change without the
-        // user seeing it resize under them. A notice overrides the setting — see
-        // `DictationController.needsFullHUD` — and every state that can carry one always
-        // arrives here from hidden, so the override never fights this guard's own
-        // flicker prevention.
-        let hud = controller.needsFullHUD ? HUDSize.full : Settings.shared.hudSize
-        setContentSize(Self.panelSize(for: hud))
+        // user seeing it resize under them (besides the same-pill resize above). A notice
+        // overrides the setting — see `DictationController.needsFullHUD`.
+        setContentSize(size)
         reposition()
         alphaValue = 0
         orderFrontRegardless()

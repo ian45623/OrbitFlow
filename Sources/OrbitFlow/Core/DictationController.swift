@@ -90,8 +90,11 @@ final class DictationController {
         if notice != nil { return true }
         if case .idle = state, isRewriting { return true }
         // An offer is only useful if you can see what it's offering, and Compact has no
-        // room for a word of it.
-        if isReadAloudShowing { return true }
+        // room for a word of it. Ignored while a dictation is active: the pill belongs to
+        // the recording then (`HUDView.isReadingAloud` already hides the read-aloud
+        // controls), so speech started elsewhere must not resize a Compact pill out from
+        // under it.
+        if isReadAloudShowing, !state.isActive { return true }
         return false
     }
 
