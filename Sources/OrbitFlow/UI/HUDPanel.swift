@@ -25,8 +25,8 @@ final class HUDPanel: NSPanel {
     }
 
     /// Read in `present()` to decide whether this pill needs to be full-sized for a
-    /// notice or read aloud. Stored rather than reaching for a shared singleton so the panel doesn't
-    /// need to know how the controller it was handed relates to anything else.
+    /// notice or read aloud. Stored rather than reaching for a shared singleton so the
+    /// panel doesn't need to know how the controller it was handed relates to anything else.
     private let controller: DictationController
 
     init(controller: DictationController) {
