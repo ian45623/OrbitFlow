@@ -49,9 +49,9 @@ everything read, and replay from History.
 | Piece | New / existing | Job |
 |---|---|---|
 | `HotkeyMonitor` | existing, +1 event type | Adds `leftMouseUp` to the tap mask and calls a new `onMouseUp`. The callback does nothing else: a slow tap is disabled by macOS. |
-| `SelectedText.read() -> String?` | new, `Core/SelectedText.swift` | Reads `kAXSelectedTextAttribute` from the focused element. Returns nil for empty or whitespace-only text and for `AXSecureTextField` (checked before the value is read). Sets a short AX messaging timeout (0.25 s) on the element so a hung app cannot stall the main thread. The focused-element lookup is extracted from `TextInjector` and shared. |
-| `Speaker` | new, `Core/Speaker.swift` | `@MainActor @Observable` wrapper around one `AVSpeechSynthesizer`: `speak(_:)`, `stop()`, `isSpeaking`. Reads voice and rate from `Settings` at `speak` time. One shared instance used by the pill, the History detail page and the Settings preview. |
-| Offer rule | new pure function in `OrbitFlowHotkey` | `shouldOfferReadAloud(text:lastOffered:enabled:isDictating:) -> Bool`. Lives in a library target so it can be unit tested; the app target is an executable no test can import. |
+| `SelectedText.read() -> String?` | new, `Core/SelectedText.swift` | Reads `kAXSelectedTextAttribute` from the frontmost app's focused element. Returns nil when Orbit Flow itself is frontmost, for empty or whitespace-only text, and for the `AXSecureTextField` subrole (checked before the value is read). Queries through `AXUIElementCreateApplication(pid)` with a 0.25 s messaging timeout, not the system-wide element: a timeout set on the system-wide element is process-global and would change `TextInjector`'s behaviour. For the same reason nothing is extracted from `TextInjector`. |
+| `Speaker` | new, `Core/Speaker.swift` | `@MainActor @Observable` wrapper around one `AVSpeechSynthesizer`: `speak(_:)`, `stop()`, `isSpeaking`, and `text` (what is being spoken, for the pill label). Reads voice and rate from `Settings` at `speak` time. One shared instance used by the pill, the History detail page and the Settings preview. |
+| Offer rule | new pure function in `OrbitFlowHotkey` | `shouldOfferReadAloud(text:lastOffered:enabled:isBusy:) -> Bool`. `isBusy` is dictation running, a rewrite in flight, or a notice showing. Lives in a library target so it can be unit tested; the app target is an executable no test can import. |
 | `DictationController` | existing, extended | Holds the offered text and the last-offered text; `offerReadAloud(_:)`, `readAloud()`, `stopReadingAloud()`. `needsFullHUD` is true while an offer is showing or `Speaker.isSpeaking`. |
 | `HUDView` | existing, extended | In read-aloud mode shows ✕, the start of the text (one line, tail-truncated) and ▶ (■ while speaking) instead of discard, waveform and confirm. |
 | `TranscriptionDetail` | existing, +1 button | ▶ Read aloud / ■ Stop, speaking the text shown on the page. |
@@ -64,9 +64,10 @@ everything read, and replay from History.
 1. `leftMouseUp` in any app → `onMouseUp` → a `Task` waits ~50 ms (the app updates its
    selection after the event) → `SelectedText.read()`.
 2. Offered only if `shouldOfferReadAloud` is true: setting on, text non-empty, text
-   differs from the last offered text, no dictation running. The "differs" check is also
+   differs from the last offered text, nothing busy. The "differs" check is also
    what stops a click on the pill's own ▶ (itself a mouse-up, with the selection still in
-   place) from re-offering.
+   place) from re-offering. A mouse-up that finds no selection clears the last offered
+   text, so deselecting and re-selecting the same passage offers it again.
 3. The pill presents at Full size with the start of the text and ▶. A 4 s timer, using the
    same token pattern as `flash`, fades it if nothing is pressed.
 4. ▶ → `RunLog.record(DictationRun(date: .now, engine: "Read aloud", audioSeconds: 0,
@@ -80,7 +81,11 @@ everything read, and replay from History.
    transcribe the voice.
 
 A new highlight while speaking replaces the offer with ▶ for the new text; speech
-continues until that ▶ (or ■) is pressed.
+continues until that ▶ (or ✕) is pressed. If the offer fades, the pill goes back to
+showing what is being spoken, with ■.
+
+Any speech shows the pill — including ▶ on the History detail page and the Settings
+Preview — labelled with the spoken text and a ■, so there is always one place to stop it.
 
 ---
 
@@ -111,7 +116,7 @@ continues until that ▶ (or ■) is pressed.
 - `MainWindow.swift:29` — "Transcriptions" → "History"
 - `MainWindow.swift:186` — "Search transcriptions" → "Search history"
 - `TranscriptionDetail.swift:90` — back button "Transcriptions" → "History"
-- README mentions of the Transcriptions tab.
+- The README does not mention the tab, so it needs no change.
 
 ---
 
@@ -146,6 +151,7 @@ for text equal to the last offered.
 | 2 | Drag-select in Chrome, Slack, VS Code, Terminal | Record actual result; keep the Settings note accurate |
 | 3 | Double-click a word; triple-click a paragraph | Offered |
 | 4 | Plain click in a text field (no selection) | No pill |
+| 4a | Deselect, then re-select the same passage | Offered again |
 | 5 | Press ▶ | Speech starts; exactly one `Read aloud` entry in History; no re-offer |
 | 6 | Ignore the offer | Fades after ~4 s |
 | 7 | ■, ✕, Esc while speaking | Speech stops, pill dismisses |
