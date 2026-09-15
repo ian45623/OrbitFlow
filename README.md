@@ -54,6 +54,16 @@ silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click
 isn't notarized, so macOS blocks it the first time. Go to System Settings ▸ Privacy &
 Security, click **Open Anyway**, then grant the same two permissions as above.
 
+### Shipping updates
+
+```bash
+make release     # commit + push first; publishes GitHub release build-<commit count>
+```
+
+Every installed copy picks it up from Settings ▸ Updates ▸ **Check for updates**. It
+downloads the zip, quits, swaps itself, and reopens. No Gatekeeper prompt, and permissions
+carry over.
+
 ### Why grants survive rebuilds here
 
 TCC stores a *code-signing requirement* per entry, not just a path. An ad-hoc signature

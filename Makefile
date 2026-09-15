@@ -61,7 +61,10 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon cert dist
+.PHONY: all build test app run install clean icon cert dist release
+
+## Monotonic with no manual bumping. Uncommitted changes don't move it — `release` refuses them.
+BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
 all: app
 
@@ -109,6 +112,8 @@ app: build
 	@mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	@cp $(BUILD) "$(CONTENTS)/MacOS/$(EXEC)"
 	@cp Resources/Info.plist "$(CONTENTS)/Info.plist"
+	@# The commit count is the build number the in-app updater compares against.
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" "$(CONTENTS)/Info.plist"
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$(CONTENTS)/Resources/"; fi
 	@printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	@# Belt and braces: the staging dir isn't synced, but the copied binary can still carry
@@ -191,6 +196,16 @@ dist:
 	@rm -f "$(DIST)"
 	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
 	@echo "wrote $(DIST)"
+
+## Publishes the zip as GitHub release `build-<N>`; every installed copy's
+## Settings ▸ Check for updates picks it up. Committed, pushed code only, so the number on
+## a release always names real source.
+release:
+	@test -z "$$(git status --porcelain)" || { echo "commit your changes first"; exit 1; }
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse @{u} 2>/dev/null)" || { echo "push first"; exit 1; }
+	@$(MAKE) dist
+	@gh release create "build-$(BUILD_NUMBER)" "$(DIST)" --target "$$(git rev-parse HEAD)" \
+		--title "Build $(BUILD_NUMBER)" --notes "$$(git log -1 --pretty=%s)"
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"

@@ -25,6 +25,7 @@ struct SettingsPanel: View {
     /// Shared, so a download started from the menu bar — or by a first dictation —
     /// shows up here too.
     @State private var parakeet = ParakeetDownload.shared
+    @State private var updater = Updater.shared
     @State private var isConfirmingRemove = false
 
     /// Shortcut recording: the local key monitor while it's live, the modifier pressed on
@@ -194,6 +195,11 @@ struct SettingsPanel: View {
                         .font(DS.Font.caption)
                         .foregroundStyle(DS.Color.inkMuted)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                group("Updates") {
+                    note("Version \(Updater.currentVersion) (build \(Updater.currentBuild))")
+                    updateRow
                 }
             }
             .frame(maxWidth: measure, alignment: .leading)
@@ -408,6 +414,31 @@ struct SettingsPanel: View {
         .padding(DS.Space.base)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+    }
+
+    @ViewBuilder
+    private var updateRow: some View {
+        switch updater.phase {
+        case .idle, .upToDate, .failed:
+            if updater.phase == .upToDate { note("You're on the latest build.") }
+            if case .failed(let message) = updater.phase {
+                HStack(alignment: .top, spacing: DS.Space.snug) {
+                    StatusDot(color: DS.Color.signal, isOn: true)
+                    Text(message)
+                        .font(DS.Font.caption)
+                        .foregroundStyle(DS.Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ActionButton(title: "Check for updates") { updater.check() }
+        case .checking:
+            note("Checking…")
+        case .available(let build, _):
+            note("Build \(build) is available. Orbit Flow will quit, update, and reopen.")
+            ActionButton(title: "Install update", kind: .primary) { updater.install() }
+        case .installing:
+            note("Downloading and installing…")
+        }
     }
 
     /// Registering points the login item at *this* bundle, wherever it happens to be.
