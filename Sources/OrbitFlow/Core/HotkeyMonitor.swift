@@ -21,6 +21,12 @@ final class HotkeyMonitor {
     /// half of a chord like ⌘C. Its release is ignored after this.
     var onChord: (() -> Void)?
 
+    /// The left mouse button came up anywhere on the system — which is when a selection
+    /// made by dragging or double-clicking is finished. Always passed through untouched,
+    /// and nothing about the click is read here: the tap is disabled by macOS if it runs
+    /// slowly, so the selection is looked up afterwards, by the caller.
+    var onMouseUp: (() -> Void)?
+
     /// Escape was pressed. Return `true` to swallow it, `false` to let it through.
     ///
     /// The decision belongs to the caller, not here, and it matters: Escape is swallowed
@@ -37,9 +43,11 @@ final class HotkeyMonitor {
         // `keyDown`/`keyUp` are here for key-combination shortcuts, chord detection and
         // Escape. The tap is handed every key on the system, so `handle` compares the key
         // code against the shortcuts and Escape and nothing else — no key is stored or logged.
+        // `leftMouseUp` is here for read aloud, and is only ever forwarded.
         let mask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -144,6 +152,10 @@ final class HotkeyMonitor {
             pressed.remove(key)
             onRelease?()
             return true
+
+        case .leftMouseUp:
+            onMouseUp?()
+            return false
 
         default:
             return false
