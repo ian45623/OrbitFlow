@@ -48,8 +48,8 @@ everything read, and replay from History.
 
 | Piece | New / existing | Job |
 |---|---|---|
-| `HotkeyMonitor` | existing, +1 event type | Adds `leftMouseUp` to the tap mask and calls a new `onMouseUp`. The callback does nothing else: a slow tap is disabled by macOS. |
-| `SelectedText.read() -> String?` | new, `Core/SelectedText.swift` | Reads `kAXSelectedTextAttribute` from the frontmost app's focused element. Returns nil when Orbit Flow itself is frontmost, for empty or whitespace-only text, and for the `AXSecureTextField` subrole (checked before the value is read). Queries through `AXUIElementCreateApplication(pid)` with a 0.25 s messaging timeout, not the system-wide element: a timeout set on the system-wide element is process-global and would change `TextInjector`'s behaviour. For the same reason nothing is extracted from `TextInjector`. |
+| `HotkeyMonitor` | existing, +1 event type | Adds `leftMouseUp` to the tap mask and calls a new `onMouseUp`. The bit is in the mask only while read aloud is enabled, so with the feature off no mouse-up waits on Orbit Flow; toggling the setting rebuilds the tap. The callback does nothing else: a slow tap is disabled by macOS. |
+| `SelectedText.read() -> String?` | new, `Core/SelectedText.swift` | Reads `kAXSelectedTextAttribute` from the frontmost app's focused element. Returns nil when Orbit Flow itself is frontmost, for empty or whitespace-only text, and for the `AXSecureTextField` subrole (checked before the value is read). The AX calls run off the main thread — only the frontmost pid is looked up on the main actor — because the event tap runs on the main run loop and a slow app would otherwise delay input system-wide; a read superseded by a newer mouse-up is dropped. Queries through `AXUIElementCreateApplication(pid)` with a 0.25 s messaging timeout, not the system-wide element: a timeout set on the system-wide element is process-global and would change `TextInjector`'s behaviour. For the same reason nothing is extracted from `TextInjector`. |
 | `Speaker` | new, `Core/Speaker.swift` | `@MainActor @Observable` wrapper around one `AVSpeechSynthesizer`: `speak(_:)`, `stop()`, `isSpeaking`, and `text` (what is being spoken, for the pill label). Reads voice and rate from `Settings` at `speak` time. One shared instance used by the pill, the History detail page and the Settings preview. |
 | Offer rule | new pure function in `OrbitFlowHotkey` | `shouldOfferReadAloud(text:lastOffered:enabled:isBusy:) -> Bool`. `isBusy` is dictation running, a rewrite in flight, or a notice showing. Lives in a library target so it can be unit tested; the app target is an executable no test can import. |
 | `DictationController` | existing, extended | Holds the offered text and the last-offered text; `offerReadAloud(_:)`, `readAloud()`, `stopReadingAloud()`. `needsFullHUD` is true while an offer is showing or `Speaker.isSpeaking`. |
@@ -74,11 +74,14 @@ everything read, and replay from History.
    processSeconds: 0, text: text))` → `Speaker.speak(text)` → button becomes ■. The timer
    is cancelled.
 5. Speech finishes → pill fades.
-6. ■, ✕ or Esc → `Speaker.stop()` and dismiss. Esc is swallowed only while an offer is
-   showing or speech is running, matching the existing `onEscape` contract.
-7. Talk key pressed while offered or speaking → stop speech, clear the offer, then start
-   dictation as usual. Stopping first is required: the microphone would otherwise
-   transcribe the voice.
+6. ■, ✕ or Esc → `Speaker.stop()` and dismiss. Esc is swallowed only while speech is
+   running (or a recording, as before); with only an offer showing, Esc clears it and
+   still reaches the app.
+7. Talk key pressed while offered or speaking → the offer clears at once, and speech stops
+   just before the microphone opens, then dictation runs as usual. Stopping before capture
+   is required: the microphone would otherwise transcribe the voice. Stopping no earlier
+   is what lets a chord using the talk modifier (⌥-characters with Right ⌥) leave speech
+   playing.
 
 A new highlight while speaking replaces the offer with ▶ for the new text; speech
 continues until that ▶ (or ✕) is pressed. If the offer fades, the pill goes back to
@@ -126,7 +129,7 @@ Rule: never interrupt the user; the failure mode is "no pill".
 
 | Situation | Behaviour |
 |---|---|
-| AX returns nothing or times out | No pill. Log that the read was empty; never log the text. Any logging of selection text uses `privacy: .private`. |
+| AX returns nothing or times out | No pill and nothing logged — it would fire on every click. Never log the text. Any logging of selection text uses `privacy: .private`. |
 | Password field | Skipped before the value is read. |
 | Saved voice uninstalled | Fall back to system default; picker shows "System default". |
 | Talk key while offered or speaking | Stop speech, clear offer, dictate normally. |
@@ -165,3 +168,12 @@ for text equal to the last offered.
 | 15 | Uninstall the chosen voice | Falls back to system default |
 | 16 | Rename | Sidebar, search placeholder and back button read "History"; old entries still load |
 | 17 | Clipboard before and after ▶ | Unchanged |
+| 18 | New highlight → ▶ while already speaking | New passage speaks; pill keeps ■; no flicker to ▶ |
+| 19 | History ▶ and Settings Preview | Each shows the pill with ■ |
+| 20 | Compact size, talk key mid-speech | Pill resizes in place to Compact |
+| 21 | Rewrite notice arrives during speech | Notice shows; pill ✕ stops speech |
+| 22 | "Open Spoken Content settings" | Opens Accessibility ▸ Spoken Content |
+| 23 | While speaking, type a chord using the talk modifier (e.g. ⌥-character with Right ⌥) | Speech continues |
+| 24 | Setting on, click repeatedly in a beachballing app | Typing elsewhere stays responsive |
+| 25 | Offer showing, press Esc in a search field | Offer clears and the field also receives Esc |
+| 26 | Setting off | Mouse-ups are not intercepted (no read-aloud behaviour; toggling on works without relaunch) |
