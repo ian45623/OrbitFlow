@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
+import OrbitFlowHotkey
 
 /// Which speech engine transcribes an utterance.
 enum SpeechEngineChoice: String, CaseIterable, Sendable {
@@ -82,8 +83,8 @@ enum HUDSize: String, CaseIterable, Sendable {
 final class Settings {
     static let shared = Settings()
 
-    var pushToTalkKey: PushToTalkKey {
-        didSet { defaults.set(pushToTalkKey.rawValue, forKey: Keys.pushToTalkKey) }
+    var shortcutKeys: [Shortcut] {
+        didSet { defaults.set(try? JSONEncoder().encode(shortcutKeys), forKey: Keys.shortcuts) }
     }
 
     var engine: SpeechEngineChoice {
@@ -144,7 +145,10 @@ final class Settings {
     private let defaults = UserDefaults.standard
 
     private enum Keys {
-        static let pushToTalkKey = "pushToTalkKey"
+        static let shortcuts = "shortcuts"
+        /// Read only to migrate: the preset-name list, then the original single key.
+        static let previousShortcutKeys = "shortcutKeys"
+        static let legacyPushToTalkKey = "pushToTalkKey"
         static let cleanupEnabled = "cleanupEnabled"
         static let soundEnabled = "soundEnabled"
         static let engine = "engine"
@@ -163,8 +167,13 @@ final class Settings {
     }
 
     private init() {
-        let raw = defaults.string(forKey: Keys.pushToTalkKey) ?? PushToTalkKey.rightOption.rawValue
-        pushToTalkKey = PushToTalkKey(rawValue: raw) ?? .rightOption
+        let resolvedKeys = ShortcutKeys.resolved(
+            stored: defaults.data(forKey: Keys.shortcuts),
+            previous: defaults.array(forKey: Keys.previousShortcutKeys) as? [String],
+            legacy: defaults.string(forKey: Keys.legacyPushToTalkKey)
+        )
+        shortcutKeys = resolvedKeys
+        defaults.set(try? JSONEncoder().encode(resolvedKeys), forKey: Keys.shortcuts)
         // Apple by default: no download, no dependency, live text while speaking.
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true

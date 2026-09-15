@@ -1,5 +1,6 @@
 import OrbitFlowDictionary
 import OrbitFlowAIRewrite
+import OrbitFlowHotkey
 import AVFoundation
 import AppKit
 import Foundation
@@ -162,9 +163,10 @@ final class DictationController {
     /// - Returns: `false` if the hotkey tap couldn't be installed (missing Accessibility).
     @discardableResult
     func activate() -> Bool {
-        hotkey.key = Settings.shared.pushToTalkKey
+        hotkey.keys = Settings.shared.shortcutKeys
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
         hotkey.onRelease = { [weak self] in self?.hotkeyReleased() }
+        hotkey.onChord = { [weak self] in self?.hotkeyChorded() }
         // Escape does exactly what the pill's ✕ does. `discard()` already ignores a call
         // when nothing is running, but the swallow decision needs the answer up front:
         // Escape must reach the app underneath whenever there's no recording to cancel.
@@ -183,7 +185,13 @@ final class DictationController {
         cancelDictation()
     }
 
-    /// Re-arms the tap after the user picks a different push-to-talk key.
+    /// Stops the tap without touching dictation or `isHotkeyArmed`, so Settings can record
+    /// a new shortcut without the current ones firing. `reloadHotkey()` resumes it.
+    func pauseHotkey() {
+        hotkey.stop()
+    }
+
+    /// Re-arms the tap after the user changes the shortcut keys.
     @discardableResult
     func reloadHotkey() -> Bool {
         hotkey.stop()
@@ -237,6 +245,14 @@ final class DictationController {
             return
         }
         endDictation()
+    }
+
+    /// A lone-modifier shortcut turned out to be half of a chord, like ⌘ in ⌘C. Throw away
+    /// the recording that press just started — but not one it was stopping, which is
+    /// already `.finishing`, nor one a tap latched on earlier.
+    private func hotkeyChorded() {
+        guard state == .starting || state == .listening, !isLatched else { return }
+        discard()
     }
 
     // MARK: - Pill controls

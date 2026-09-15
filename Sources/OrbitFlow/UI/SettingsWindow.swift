@@ -1,6 +1,9 @@
+import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 import OrbitFlowAIRewrite
+import OrbitFlowHotkey
 
 /// The settings content, shared by the Settings tab in the main window and the standard
 /// ⌘, window. One view rather than two, so the two can never drift apart.
@@ -24,6 +27,13 @@ struct SettingsPanel: View {
     @State private var parakeet = ParakeetDownload.shared
     @State private var isConfirmingRemove = false
 
+    /// Shortcut recording: the local key monitor while it's live, the modifier pressed on
+    /// its own so far (committed on release unless a key joins it), and why the last
+    /// attempt was refused.
+    @State private var recordMonitor: Any?
+    @State private var pendingModifier: Int64?
+    @State private var recordProblem: String?
+
     /// `SMAppService` is the store for this — there is no mirrored bool in `Settings`,
     /// so the switch can never disagree with System Settings ▸ General ▸ Login Items.
     /// Held in state only so the toggle redraws; re-read after every change.
@@ -42,30 +52,19 @@ struct SettingsPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.roomy) {
-                group("Push to talk") {
+                group("Shortcut keys") {
                     if !controller.isHotkeyArmed { accessibilityNotice }
 
-                    Segmented(
-                        options: PushToTalkKey.allCases.map { ($0, $0.displayName) },
-                        selection: Binding(
-                            get: { settings.pushToTalkKey },
-                            set: { key in
-                                settings.pushToTalkKey = key
-                                controller.reloadHotkey()
-                            }
-                        )
-                    )
-                    note("Tap this key to start dictating and tap it again to stop — the text "
+                    shortcutList
+
+                    note("Tap a shortcut to start dictating and tap it again to stop — the text "
                         + "lands wherever your cursor is. Or hold it down and let go, if you'd "
                         + "rather not think about stopping.")
                     note("The record button works regardless of what's focused, so you can still "
                         + "record without touching the key.")
-                    // These three are the only safe choices, and it's worth saying why rather
-                    // than leaving it looking like an unfinished picker: the event tap watches
-                    // modifier changes, and a dedicated right-hand modifier is the only kind
-                    // that can be held down without typing anything into your document.
-                    note("Right ⌥ and Right ⌘ are consumed while held. fn is passed through, so "
-                        + "fn+arrow, fn+delete and the emoji picker keep working.")
+                    note("A shortcut can be a modifier on its own, like Right ⌥ or fn, or a "
+                        + "combination like ⌃⌥Space. If a lone modifier turns out to be part of "
+                        + "another shortcut, like ⌘ in ⌘C, the recording it started is thrown away.")
                 }
 
                 group("Model") {
@@ -284,6 +283,101 @@ struct SettingsPanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
         }
+    }
+
+    private var shortcutList: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            ForEach(settings.shortcutKeys, id: \.self) { key in
+                HStack {
+                    Text(key.displayName)
+                        .font(DS.Font.body)
+                        .foregroundStyle(DS.Color.ink)
+                    Spacer()
+                    if settings.shortcutKeys.count > 1 {
+                        ActionButton(title: "Remove", kind: .quiet) {
+                            settings.shortcutKeys = ShortcutKeys.removing(key, from: settings.shortcutKeys)
+                            controller.reloadHotkey()
+                        }
+                    }
+                }
+            }
+
+            if recordMonitor != nil {
+                HStack {
+                    Text("Press a key or combination…")
+                        .font(DS.Font.body)
+                        .foregroundStyle(DS.Color.inkMuted)
+                    Spacer()
+                    ActionButton(title: "Cancel", kind: .quiet) { stopRecording() }
+                }
+                .padding(DS.Space.snug)
+                .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+
+                if let recordProblem {
+                    Text(recordProblem)
+                        .font(DS.Font.caption)
+                        .foregroundStyle(DS.Color.caution)
+                }
+            } else {
+                ActionButton(title: "Record shortcut", systemImage: "plus", kind: .quiet) {
+                    startRecording()
+                }
+            }
+        }
+        .onDisappear { stopRecording() }
+    }
+
+    /// Captures the next key press in this window. The event tap is paused meanwhile, both
+    /// so the current shortcuts don't start dictating and because the tap would swallow
+    /// Right ⌥ and Right ⌘ before this monitor ever saw them.
+    private func startRecording() {
+        guard recordMonitor == nil else { return }
+        controller.pauseHotkey()
+        recordProblem = nil
+        recordMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            guard let flags = event.cgEvent?.flags else { return nil }
+            let keyCode = Int64(event.keyCode)
+
+            if event.type == .flagsChanged {
+                let key = Shortcut(keyCode: keyCode)
+                // Caps Lock has no hold state to read; commit it so the refusal shows.
+                guard let flag = key.deviceFlag else {
+                    commit(key)
+                    return nil
+                }
+                if flags.contains(flag) {
+                    pendingModifier = keyCode
+                } else if pendingModifier == keyCode {
+                    commit(key)
+                }
+                return nil
+            }
+
+            pendingModifier = nil
+            if keyCode == Int64(kVK_Escape), flags.intersection(Shortcut.modifierMask).isEmpty {
+                stopRecording()
+                return nil
+            }
+            commit(Shortcut(keyCode: keyCode, modifiers: flags, characters: event.charactersIgnoringModifiers))
+            return nil
+        }
+    }
+
+    private func commit(_ key: Shortcut) {
+        if let problem = key.problem {
+            recordProblem = problem
+            return
+        }
+        settings.shortcutKeys = ShortcutKeys.adding(key, to: settings.shortcutKeys)
+        stopRecording()
+    }
+
+    private func stopRecording() {
+        guard let recordMonitor else { return }
+        NSEvent.removeMonitor(recordMonitor)
+        self.recordMonitor = nil
+        pendingModifier = nil
+        controller.reloadHotkey()
     }
 
     /// Shown when the event tap isn't live. Without this the app fails silently: the key

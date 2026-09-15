@@ -43,6 +43,17 @@ Then grant two permissions — neither is optional, and neither can be requested
 
 Restart Orbit Flow after granting Accessibility. Then hold **Right ⌥** and talk.
 
+### Installing on another Mac
+
+```bash
+make dist        # release build → ~/Desktop/Orbit Flow.zip
+```
+
+Send the zip over (AirDrop, USB, cloud drive). The other Mac needs macOS 26 and Apple
+silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click. The app
+isn't notarized, so macOS blocks it the first time. Go to System Settings ▸ Privacy &
+Security, click **Open Anyway**, then grant the same two permissions as above.
+
 ### Why grants survive rebuilds here
 
 TCC stores a *code-signing requirement* per entry, not just a path. An ad-hoc signature

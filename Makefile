@@ -1,6 +1,16 @@
 EXEC     := OrbitFlow
 CONFIG   := debug
 
+## Command Line Tools 27 default to the macOS 27 SDK, whose SwiftUI `@State` is a macro
+## implemented by a SwiftUIMacros plugin that ships only with full Xcode — so every build
+## fails with "plugin for module 'SwiftUIMacros' not found". Pin the 26.5 SDK while it's
+## installed. An SDKROOT from the environment still wins.
+# ponytail: hardcoded SDK path; drop once Xcode is installed or the CLT ships the plugin.
+SDK_26 := /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+ifneq ($(wildcard $(SDK_26)),)
+export SDKROOT ?= $(SDK_26)
+endif
+
 ## Build products live OUTSIDE this directory, for the same reason the .app does.
 ##
 ## A file-provider synced folder (iCloud Desktop/Documents, Dropbox) mutates files inside
@@ -51,7 +61,7 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon cert
+.PHONY: all build test app run install clean icon cert dist
 
 all: app
 
@@ -73,11 +83,14 @@ build:
 ## skipped automatically when the CLT directory isn't there.
 CLT_FRAMEWORKS := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
 CLT_LIB        := /Library/Developer/CommandLineTools/Library/Developer/usr/lib
+## With the 26.5 SDK pinned above, `@Test` can't find its TestingMacros plugin either.
+CLT_TESTING_PLUGINS := /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 TESTFLAGS      := $(if $(wildcard $(CLT_FRAMEWORKS)),\
                     -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) \
                     -Xlinker -F -Xlinker $(CLT_FRAMEWORKS) \
                     -Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) \
-                    -Xlinker -rpath -Xlinker $(CLT_LIB),)
+                    -Xlinker -rpath -Xlinker $(CLT_LIB) \
+                    -Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS),)
 
 test:
 	swift test --scratch-path "$(SCRATCH)" $(TESTFLAGS)
@@ -167,6 +180,17 @@ cert:
 	security add-trusted-cert -r trustRoot -p codeSign \
 	  -k "$(HOME)/Library/Keychains/login.keychain-db" "$$d/c.pem"; \
 	echo "created \"$(CERT_CN)\" — now run: make install"
+
+## A release build zipped for copying to another Mac. `ditto` rather than `zip` so the
+## code signature and bundle metadata survive. Without a Developer ID + notarization the
+## other Mac's Gatekeeper blocks the first launch — see README "Installing on another Mac".
+DIST := $(HOME)/Desktop/Orbit Flow.zip
+
+dist:
+	@$(MAKE) app CONFIG=release
+	@rm -f "$(DIST)"
+	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
+	@echo "wrote $(DIST)"
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"

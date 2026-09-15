@@ -1,52 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import OrbitFlowHotkey
 
-/// Which modifier key holds the mic open.
-enum PushToTalkKey: String, CaseIterable, Sendable {
-    case rightOption
-    case fn
-    case rightCommand
-
-    var keyCode: Int64 {
-        switch self {
-        case .rightOption: Int64(kVK_RightOption)   // 61
-        case .fn: Int64(kVK_Function)               // 63
-        case .rightCommand: Int64(kVK_RightCommand) // 54
-        }
-    }
-
-    /// Device-*dependent* bit for this specific physical key.
-    ///
-    /// `CGEventFlags.maskAlternate` is the union mask — it's set whenever *either* Option
-    /// key is down. Using it means: hold Left ⌥, tap Right ⌥, and the release is invisible
-    /// (the union bit is still set by the left key), so `onRelease` never fires. The mic
-    /// stays open, the HUD stays up, and the next press is swallowed too.
-    ///
-    /// These raw values are the NX_DEVICE* masks from IOKit's event system; they carry the
-    /// left/right distinction that the public `CGEventFlags` constants discard.
-    var flag: CGEventFlags {
-        switch self {
-        case .rightOption: CGEventFlags(rawValue: 0x40)   // NX_DEVICERALTKEYMASK
-        case .rightCommand: CGEventFlags(rawValue: 0x10)  // NX_DEVICERCMDKEYMASK
-        case .fn: .maskSecondaryFn                        // no left/right variant exists
-        }
-    }
-
-    var displayName: String {
-        switch self {
-        case .rightOption: "Right ⌥"
-        case .fn: "fn"
-        case .rightCommand: "Right ⌘"
-        }
-    }
-
-    /// Swallowing `fn` would break fn+arrow, fn+delete and the emoji picker, so we let it
-    /// through. Dedicated right-hand modifiers are safe to consume.
-    var shouldConsumeEvent: Bool { self != .fn }
-}
-
-/// Watches for a held modifier key using a `CGEventTap`.
+/// Watches for a held shortcut — a lone modifier or a key combination — using a `CGEventTap`.
 ///
 /// A tap is required rather than `NSEvent.addGlobalMonitor` because `fn` and left/right
 /// modifier discrimination don't surface through the higher-level APIs. This needs
@@ -55,11 +12,14 @@ enum PushToTalkKey: String, CaseIterable, Sendable {
 final class HotkeyMonitor {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var isPressed = false
+    private var pressed: Set<Shortcut> = []
 
-    var key: PushToTalkKey = .rightOption
+    var keys: [Shortcut] = ShortcutKeys.fallback
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
+    /// Another key went down while a lone-modifier shortcut was held, so that modifier was
+    /// half of a chord like ⌘C. Its release is ignored after this.
+    var onChord: (() -> Void)?
 
     /// Escape was pressed. Return `true` to swallow it, `false` to let it through.
     ///
@@ -74,11 +34,12 @@ final class HotkeyMonitor {
     func start() -> Bool {
         stop()
 
-        // `keyDown` is here only for Escape. It does mean the tap is handed every
-        // key-down on the system, so `handle` rejects anything that isn't Escape before it
-        // looks at anything else — nothing is inspected, stored or logged.
+        // `keyDown`/`keyUp` are here for key-combination shortcuts, chord detection and
+        // Escape. The tap is handed every key on the system, so `handle` compares the key
+        // code against the shortcuts and Escape and nothing else — no key is stored or logged.
         let mask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -95,8 +56,9 @@ final class HotkeyMonitor {
                 // callback genuinely does run on the main thread.
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let flags = event.flags
+                let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
                 let consume = MainActor.assumeIsolated {
-                    monitor.handle(type: type, keyCode: keyCode, flags: flags)
+                    monitor.handle(type: type, keyCode: keyCode, flags: flags, isRepeat: isRepeat)
                 }
                 return consume ? nil : Unmanaged.passUnretained(event)
             },
@@ -112,7 +74,7 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
 
-        Log.hotkey.info("listening for \(self.key.displayName)")
+        Log.hotkey.info("listening for \(ShortcutKeys.displaySummary(self.keys))")
         return true
     }
 
@@ -125,33 +87,66 @@ final class HotkeyMonitor {
         }
         tap = nil
         runLoopSource = nil
-        isPressed = false
+        pressed = []
     }
 
     // MARK: - Tap callback
 
     /// - Returns: `true` if the event should be swallowed rather than passed along.
-    private func handle(type: CGEventType, keyCode: Int64, flags: CGEventFlags) -> Bool {
+    private func handle(type: CGEventType, keyCode: Int64, flags: CGEventFlags, isRepeat: Bool) -> Bool {
         // The system disables a tap that runs too slowly or is interrupted; re-arm it.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
         }
 
-        // Escape cancels an in-flight dictation, and is swallowed only if there was one.
-        if type == .keyDown {
+        switch type {
+        case .flagsChanged:
+            guard let key = keys.first(where: { $0.isModifierOnly && $0.keyCode == keyCode }),
+                  let flag = key.deviceFlag
+            else { return false }
+
+            let nowPressed = flags.contains(flag)
+            guard nowPressed != pressed.contains(key) else { return false }
+
+            if nowPressed {
+                pressed.insert(key)
+                onPress?()
+            } else {
+                pressed.remove(key)
+                onRelease?()
+            }
+            return key.consumesEvent
+
+        case .keyDown:
+            // Auto-repeat of a held combination: swallow it, or the key types while you talk.
+            if pressed.contains(where: { !$0.isModifierOnly && $0.keyCode == keyCode }) { return true }
+
+            if pressed.contains(where: \.isModifierOnly) {
+                pressed = pressed.filter { !$0.isModifierOnly }
+                onChord?()
+            }
+
+            if !isRepeat, let key = keys.first(where: { $0.matches(keyCode: keyCode, flags: flags) }) {
+                pressed.insert(key)
+                onPress?()
+                return true
+            }
+
+            // Escape cancels an in-flight dictation, and is swallowed only if there was one.
             guard keyCode == Int64(kVK_Escape) else { return false }
             return onEscape?() ?? false
+
+        case .keyUp:
+            // Matched on key code alone: the modifiers are often let go first.
+            guard let key = pressed.first(where: { !$0.isModifierOnly && $0.keyCode == keyCode })
+            else { return false }
+            pressed.remove(key)
+            onRelease?()
+            return true
+
+        default:
+            return false
         }
-
-        guard type == .flagsChanged, keyCode == key.keyCode else { return false }
-
-        let nowPressed = flags.contains(key.flag)
-        guard nowPressed != isPressed else { return false }
-        isPressed = nowPressed
-
-        if nowPressed { onPress?() } else { onRelease?() }
-
-        return key.shouldConsumeEvent
     }
 }

@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowHotkey
 import AppKit
 import SwiftUI
 
@@ -198,7 +199,7 @@ private struct TranscriptionList: View {
                 EmptyPanel(
                     label: store.runs.isEmpty ? "Nothing dictated yet" : "No matches",
                     detail: store.runs.isEmpty
-                        ? "Hold \(settings.pushToTalkKey.displayName) and talk, or press record above. What you say lands here."
+                        ? "Hold \(ShortcutKeys.displaySummary(settings.shortcutKeys)) and talk, or press record above. What you say lands here."
                         : "Nothing recorded contains “\(query)”."
                 )
             } else {

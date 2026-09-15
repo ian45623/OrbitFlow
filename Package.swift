@@ -27,11 +27,19 @@ let package = Package(
             path: "Sources/OrbitFlowAIRewrite",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The shortcut-key list is its own target so resolve/add/remove can be tested
+        // without the app target. An executable cannot be imported by tests.
+        .target(
+            name: "OrbitFlowHotkey",
+            path: "Sources/OrbitFlowHotkey",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
                 "OrbitFlowDictionary",
                 "OrbitFlowAIRewrite",
+                "OrbitFlowHotkey",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -50,6 +58,12 @@ let package = Package(
             name: "OrbitFlowAIRewriteTests",
             dependencies: ["OrbitFlowAIRewrite"],
             path: "Tests/OrbitFlowAIRewriteTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowHotkeyTests",
+            dependencies: ["OrbitFlowHotkey"],
+            path: "Tests/OrbitFlowHotkeyTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

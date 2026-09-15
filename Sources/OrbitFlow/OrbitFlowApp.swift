@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import OrbitFlowAIRewrite
+import OrbitFlowHotkey
 
 @main
 struct OrbitFlowApp: App {
@@ -114,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         observeState()
-        Log.app.info("Orbit Flow ready — hold \(Settings.shared.pushToTalkKey.displayName) to dictate")
+        Log.app.info("Orbit Flow ready — hold \(ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)) to dictate")
     }
 
     /// `orbitflowyt://clear` and `orbitflowyt://show`, used by the legacy HTML dashboard and
@@ -216,21 +217,9 @@ private struct MenuContent: View {
     @State private var parakeet = ParakeetDownload.shared
 
     var body: some View {
-        Text("Hold \(settings.pushToTalkKey.displayName) to dictate")
+        Text("Hold \(ShortcutKeys.displaySummary(settings.shortcutKeys)) to dictate")
 
         Divider()
-
-        Picker("Push-to-talk key", selection: Binding(
-            get: { settings.pushToTalkKey },
-            set: { key in
-                settings.pushToTalkKey = key
-                controller.reloadHotkey()
-            }
-        )) {
-            ForEach(PushToTalkKey.allCases, id: \.self) { key in
-                Text(key.displayName).tag(key)
-            }
-        }
 
         // Meaningful whenever a rewrite can run at all — under On demand this picker is what
         // the default right-click row reads. Hidden when nothing can use it, because a mode

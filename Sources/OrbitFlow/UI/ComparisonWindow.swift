@@ -1,4 +1,5 @@
 import SwiftUI
+import OrbitFlowHotkey
 
 /// Live-updating store behind the comparison window.
 ///
@@ -127,7 +128,7 @@ struct ComparisonWindow: View {
             Image(systemName: "waveform")
                 .font(.system(size: 30))
                 .foregroundStyle(DS.Color.inkFaint)
-            Text("Hold \(settings.pushToTalkKey.displayName), say a sentence, let go.")
+            Text("Hold \(ShortcutKeys.displaySummary(settings.shortcutKeys)), say a sentence, let go.")
                 .font(.system(size: 15, weight: .semibold))
             Text(settings.compareMode
                  ? "Both engines run on that one recording and appear here."

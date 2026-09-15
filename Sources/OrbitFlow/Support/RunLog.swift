@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowHotkey
 import Foundation
 
 /// One rewrite of a transcription, kept so the detail page can stack them.
@@ -156,7 +157,7 @@ enum RunLog {
         try? DashboardHTML.render(
             runs: runs,
             compareMode: Settings.shared.compareMode,
-            key: Settings.shared.pushToTalkKey.displayName
+            key: ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)
         ).write(to: dashboardURL, atomically: true, encoding: .utf8)
     }
 
