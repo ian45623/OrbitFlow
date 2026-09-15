@@ -170,6 +170,11 @@ final class DictationController {
     /// offer's fade timer must not clear a newer one.
     private var offerToken = UUID()
 
+    /// Identifies the latest mouse-up. Selection reads finish in whatever order the apps
+    /// answer, so a slow read from an earlier click must not offer — or un-remember — a
+    /// selection that a later click has already replaced.
+    private var mouseUpToken = UUID()
+
     private var holdStarted: Date?
     private var releasedAt: Date?
     private var engineName = ""
@@ -372,12 +377,22 @@ final class DictationController {
 
     private func mouseReleased() {
         guard Settings.shared.readAloudEnabled else { return }
+        mouseUpToken = UUID()
+        let token = mouseUpToken
         Task { @MainActor in
             // The tap sees the mouse-up before the app under the cursor has handled it, so
             // the selection isn't final yet at this instant.
             try? await Task.sleep(for: .milliseconds(50))
+            // A click that came in during the wait has its own read coming.
+            guard mouseUpToken == token else { return }
 
-            guard let text = SelectedText.read() else {
+            let pid = SelectedText.frontmostAppPID()
+            let read = await Task.detached(priority: .userInitiated) {
+                pid.flatMap { SelectedText.read(pid: $0) }
+            }.value
+            guard mouseUpToken == token else { return }
+
+            guard let text = read else {
                 lastOfferedSelection = nil
                 return
             }
