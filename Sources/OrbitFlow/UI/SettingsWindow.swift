@@ -443,6 +443,8 @@ struct SettingsPanel: View {
         }
         .onChange(of: settings.readAloudEnabled) { _, isOn in
             if !isOn { controller.stopReadingAloud() }
+            // The tap only listens for mouse-ups while the feature is on.
+            controller.reloadHotkey()
         }
     }
 

@@ -43,11 +43,16 @@ final class HotkeyMonitor {
         // `keyDown`/`keyUp` are here for key-combination shortcuts, chord detection and
         // Escape. The tap is handed every key on the system, so `handle` compares the key
         // code against the shortcuts and Escape and nothing else — no key is stored or logged.
-        // `leftMouseUp` is here for read aloud, and is only ever forwarded.
-        let mask = (1 << CGEventType.flagsChanged.rawValue)
+        var mask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
-            | (1 << CGEventType.leftMouseUp.rawValue)
+        // `leftMouseUp` is here only while read aloud is on, and is only ever forwarded. This
+        // is an active tap, so every event in the mask waits on this app's main run loop
+        // before reaching its destination — not something to put every click on the system
+        // through for a feature that is off. Settings rebuilds the tap when it's toggled.
+        if Settings.shared.readAloudEnabled {
+            mask |= 1 << CGEventType.leftMouseUp.rawValue
+        }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
