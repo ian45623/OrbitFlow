@@ -25,6 +25,7 @@ struct TranscriptionDetail: View {
 
     @State private var store = RunStore.shared
     @State private var settings = Settings.shared
+    @State private var speaker = Speaker.shared
     /// The text every rewrite runs on. Loaded once; edits live here until saved.
     @State private var source = ""
     @State private var savedSource = ""
@@ -87,9 +88,25 @@ struct TranscriptionDetail: View {
 
     private var header: some View {
         HStack(spacing: DS.Space.snug) {
-            ActionButton(title: "Transcriptions", systemImage: "chevron.left", kind: .quiet, action: onBack)
+            ActionButton(title: "History", systemImage: "chevron.left", kind: .quiet, action: onBack)
             Spacer()
             if let run {
+                // Reads whatever the page is showing: the selected rewrite if there is one,
+                // otherwise the text on the left. Replaying doesn't file a new entry — this
+                // one is already in History.
+                let spoken = current?.text ?? source
+                ActionButton(
+                    title: speaker.isSpeaking ? "Stop" : "Read aloud",
+                    systemImage: speaker.isSpeaking ? "stop.fill" : "play.fill",
+                    kind: .quiet,
+                    isEnabled: speaker.isSpeaking || !spoken.trimmed.isEmpty
+                ) {
+                    if speaker.isSpeaking {
+                        speaker.stop()
+                    } else {
+                        speaker.speak(spoken)
+                    }
+                }
                 Text("\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.inkFaint)
