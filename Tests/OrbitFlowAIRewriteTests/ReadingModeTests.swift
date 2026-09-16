@@ -30,7 +30,7 @@ struct ReadingModeTests {
         let prompts = ReadingMode.allCases
             .filter { $0.usesAI && $0 != .custom }
             .map(\.systemPrompt)
-        #expect(prompts.count == 9)
+        #expect(prompts.count == 10)
         #expect(Set(prompts).count == prompts.count)
         #expect(prompts.allSatisfy { !$0.isEmpty })
     }
@@ -40,7 +40,8 @@ struct ReadingModeTests {
         let names = ReadingMode.allCases.map(\.displayName)
         #expect(Set(names).count == ReadingMode.allCases.count)
         #expect(ReadingMode.allCases.allSatisfy { !$0.summary.isEmpty })
-        #expect(ReadingMode.allCases.allSatisfy { !$0.statusLabel.isEmpty })
+        #expect(!ReadingMode.workingKeyword.isEmpty)
+        #expect(!ReadingMode.voicingKeyword.isEmpty)
     }
 
     /// asIs is the default and the free path. If this flips, every highlight starts
@@ -60,6 +61,24 @@ struct ReadingModeTests {
         let prompt = ReadingMode.bullets.systemPrompt
         #expect(prompt.contains("Do NOT write bullet"))
         #expect(prompt.contains("asterisk"))
+    }
+
+    /// The mode is worthless if the model hedges into two sentences, so the prompt has to
+    /// refuse the obvious workaround as well as the obvious violation.
+    @Test("One line asks for one sentence and closes the semicolon loophole")
+    func oneLineIsOneSentence() {
+        let prompt = ReadingMode.oneLine.systemPrompt
+        #expect(prompt.contains("ONE sentence"))
+        #expect(prompt.contains("semicolon"))
+    }
+
+    /// Every name has to fit a capsule sized for a mode name and a speed, so this is a
+    /// layout constraint, not a style preference.
+    @Test("No mode name is longer than the capsule can show")
+    func namesAreShort() {
+        for mode in ReadingMode.allCases {
+            #expect(mode.displayName.count <= 12, "\(mode.displayName) is too long")
+        }
     }
 
     /// The whole point of the mode: a page has to come out shorter than the summary does.

@@ -112,10 +112,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         let settings = Settings.shared
         let voiceID = settings.elevenLabsVoiceID
         guard !voiceID.isEmpty else {
-            return fail("Pick an ElevenLabs voice in Settings.")
+            return fail("No voice")
         }
         guard let apiKey = KeyStore.read(account: Self.keyAccount), !apiKey.isEmpty else {
-            return fail("Add your ElevenLabs key in Settings.")
+            return fail("No key")
         }
 
         // Speed is deliberately NOT part of the key: it is applied on playback, so the same
@@ -156,11 +156,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             } catch let error as URLError where error.code == .cancelled {
                 return
             } catch let error as URLError where error.code == .timedOut {
-                fail("ElevenLabs timed out.")
+                fail("Timed out")
             } catch is URLError {
-                fail("Couldn't reach ElevenLabs.")
+                fail("Offline")
             } catch {
-                fail("Couldn't reach ElevenLabs.")
+                fail("Offline")
             }
         }
     }
@@ -171,7 +171,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         guard let player = try? AVAudioPlayer(data: data) else {
             // `AVAudioPlayer(data:)` throws when the body isn't decodable audio — which is
             // what an HTML error page from a proxy looks like.
-            return fail("ElevenLabs returned audio we couldn't play.")
+            return fail("Bad audio")
         }
         player.delegate = self
         // `rate` is the one place the speed menu reaches ElevenLabs audio: the API's own
@@ -180,7 +180,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         player.enableRate = true
         player.rate = Float(Settings.shared.readAloudSpeed)
         guard player.play() else {
-            return fail("ElevenLabs returned audio we couldn't play.")
+            return fail("Bad audio")
         }
         self.player = player
         isPreparing = false
@@ -204,13 +204,17 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// A bad key and an exhausted quota are both 401; only the body tells them apart, so
     /// the provider's own message wins whenever it sent one.
     private static func message(for status: Int, body: Data) -> String {
-        if let detail = ElevenLabs.failureMessage(from: body) {
-            return "ElevenLabs: \(detail)"
+        // A rejected key and an exhausted account are both 401, and telling someone to
+        // check a key that is perfectly fine is the failure worth spending a branch on.
+        // ElevenLabs only distinguishes them in `detail.status`.
+        if let reason = ElevenLabs.failureStatus(from: body),
+           reason.contains("quota") || reason.contains("credit") {
+            return "No credit"
         }
         switch status {
-        case 401, 403: return "ElevenLabs rejected the key — check it in Settings."
-        case 429: return "ElevenLabs is rate-limiting — try again in a moment."
-        default: return "ElevenLabs: HTTP \(status)"
+        case 401, 403: return "Bad key"
+        case 429: return "Rate limit"
+        default: return "HTTP \(status)"
         }
     }
 

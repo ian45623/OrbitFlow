@@ -102,11 +102,11 @@ struct HUDView: View {
             // busy, so the disc that starts it is also the disc that cancels it.
             if controller.readAloudOffer == nil,
                speaker.isSpeaking || speaker.isPreparing || controller.readAloudStatus != nil {
-                HUDButton(kind: .stop, size: HUDSize.full.controlSize) {
+                HUDButton(kind: .stop, size: HUDPanel.readAloudControlSize) {
                     controller.stopReadingAloud()
                 }
             } else {
-                HUDButton(kind: .play, size: HUDSize.full.controlSize) {
+                HUDButton(kind: .play, size: HUDPanel.readAloudControlSize) {
                     controller.readAloud()
                 }
             }
@@ -116,17 +116,15 @@ struct HUDView: View {
             // Speed sits next to the mode because they are the same kind of decision — how
             // you want this passage delivered — and both are things you change on the
             // passage in front of you, not in a settings window.
-            if controller.readAloudError == nil, controller.readAloudStatus == nil {
-                speedMenu
-            }
+            if !controller.isReadAloudMessage { speedMenu }
 
-            HUDButton(kind: .discard, size: HUDSize.full.controlSize) {
+            HUDButton(kind: .discard, size: HUDPanel.readAloudControlSize) {
                 controller.stopReadingAloud()
             }
         }
         .padding(.horizontal, DS.Space.tight)
-        .frame(width: HUDPanel.readAloudPillWidth(isMessage: controller.isReadAloudMessage),
-               height: HUDSize.full.pillSize.height)
+        .frame(width: HUDPanel.readAloudPillSize.width,
+               height: HUDPanel.readAloudPillSize.height)
         .background {
             let shape = RoundedRectangle(
                 cornerRadius: min(DS.Radius.hud, HUDSize.full.pillSize.height / 2),
@@ -162,21 +160,22 @@ struct HUDView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let status = controller.readAloudStatus {
+        } else if let status = controller.readAloudStatus ?? voicingStatus {
             Text(status)
                 .font(DS.Font.body)
                 .foregroundStyle(DS.Color.inkOnHUDMuted)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if speaker.isPreparing {
-            Text("Generating voice…")
-                .font(DS.Font.body)
-                .foregroundStyle(DS.Color.inkOnHUDMuted)
-                .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             modeMenu
         }
+    }
+
+    /// "Voicing" while a networked voice renders, which is the one stage `readAloudStatus`
+    /// cannot see — it is cleared before `Speaker` is handed the text.
+    private var voicingStatus: String? {
+        speaker.isPreparing ? ReadingMode.voicingKeyword : nil
     }
 
     /// How fast it reads, as a multiple. One control for both engines: it is applied on

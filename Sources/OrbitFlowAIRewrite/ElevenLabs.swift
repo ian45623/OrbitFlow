@@ -114,6 +114,18 @@ public enum ElevenLabs {
     /// Worth the two shapes: a bad key and an exhausted quota are both HTTP 401, and this
     /// string is the only thing that tells them apart. Telling a user to check a key that
     /// is perfectly fine is the failure this prevents.
+    /// ElevenLabs' machine-readable reason, e.g. `quota_exceeded`.
+    ///
+    /// Worth reading separately from the message: a rejected key and an exhausted account
+    /// are both HTTP 401, and in a capsule with room for two words the difference between
+    /// "Bad key" and "No credit" is the whole of what the user needs.
+    public static func failureStatus(from data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let detail = root["detail"] as? [String: Any]
+        else { return nil }
+        return detail["status"] as? String
+    }
+
     public static func failureMessage(from data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let detail = root["detail"]

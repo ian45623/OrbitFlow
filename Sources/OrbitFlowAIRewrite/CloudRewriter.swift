@@ -13,6 +13,25 @@ public enum RewriteFailure: Error, Equatable {
     case unreadableResponse
     case rejected(Rejection)
 
+    /// Two words for the read-aloud capsule, which is sized for a mode name.
+    ///
+    /// The status codes are split because they mean different things to the user: 401 and
+    /// 403 are a key they must fix, 429 will work again on its own in a moment, and a 5xx
+    /// is the provider's problem, not theirs.
+    public var keyword: String {
+        switch self {
+        case .timedOut: "Timed out"
+        case .http(let status, _):
+            switch status {
+            case 401, 403: "Bad key"
+            case 429: "Rate limit"
+            default: "HTTP \(status)"
+            }
+        case .unreadableResponse: "Bad reply"
+        case .rejected: "Rejected"
+        }
+    }
+
     /// Safe to log. Never contains the API key — the key is not a member of this type and
     /// must never be interpolated into one of these strings.
     public var summary: String {

@@ -532,7 +532,9 @@ final class DictationController {
             // capsule open — a question that fades before it can be answered is worse than
             // no question.
             readAloudOffer = .text(text)
-            readAloudError = "~\(words.formatted()) words — play anyway?"
+            // "3,000 words?" rather than a sentence: the capsule is sized for a mode
+            // name, and the number is the whole question.
+            readAloudError = "\(words.formatted()) words?"
             return
         }
 
@@ -575,7 +577,7 @@ final class DictationController {
         if mode == .custom,
            Settings.shared.readingModeCustomInstruction
                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            failed("Add an instruction for your custom mode in Settings.", source: source)
+            failed("No prompt", source: source)
             return
         }
 
@@ -592,7 +594,7 @@ final class DictationController {
         case .success(let value):
             chosen = value
         case .failure(let unavailable):
-            failed(unavailable.summary, source: source)
+            failed(unavailable.keyword, source: source)
             return
         }
 
@@ -609,7 +611,7 @@ final class DictationController {
 
         transformToken = UUID()
         let token = transformToken
-        readAloudStatus = mode.statusLabel
+        readAloudStatus = ReadingMode.workingKeyword
 
         Task { @MainActor in
             do {
@@ -633,7 +635,7 @@ final class DictationController {
 
                 let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
-                    failed("That came back empty — try another mode.", source: source)
+                    failed("Empty", source: source)
                     return
                 }
 
@@ -661,10 +663,10 @@ final class DictationController {
                 // Never fall back to reading the original: you asked for a summary, and
                 // being handed the whole page instead is the one outcome this feature
                 // exists to prevent.
-                failed(
-                    (error as? RewriteFailure)?.summary ?? OnDeviceRewriter.describe(error),
-                    source: source
-                )
+                // The keyword, not the sentence: the capsule has room for a mode name.
+                // On-device failures have no keyword of their own and are rare enough to
+                // share one.
+                failed((error as? RewriteFailure)?.keyword ?? "Failed", source: source)
             }
         }
     }

@@ -13,9 +13,11 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     /// Read the selection exactly as highlighted. Makes no network call of any kind, and
     /// is the default so the feature costs nothing until the user asks it to.
     case asIs
-    case summarize
-    /// The whole page in a few sentences. The shortest mode there is.
+    /// The whole page in a single sentence. The shortest mode there is.
+    case oneLine
+    /// The whole page in a few sentences.
     case toThePoint
+    case summarize
     case concise
     case bullets
     case articulate
@@ -29,13 +31,14 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     public var displayName: String {
         switch self {
         case .asIs: "As-is"
+        case .oneLine: "One line"
+        case .toThePoint: "Gist"
         case .summarize: "Summary"
-        case .toThePoint: "To the point"
         case .concise: "Shorter"
         case .bullets: "Bullets"
         case .articulate: "Clearer"
-        case .articulateWithExample: "With example"
-        case .giveExample: "Example"
+        case .articulateWithExample: "Examples"
+        case .giveExample: "Show me"
         case .makeMeUnderstand: "Explain"
         case .explainLikeImFive: "Simple"
         case .custom: "Custom"
@@ -49,6 +52,8 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             "Reads exactly what you highlighted. Sends nothing to an AI."
         case .summarize:
             "Every main point, much shorter. The whole page in under a minute."
+        case .oneLine:
+            "The entire thing in one sentence. However long it was."
         case .toThePoint:
             "A whole page in three lines. Only what you'd repeat to someone else."
         case .concise:
@@ -74,22 +79,16 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     /// default free and offline.
     public var usesAI: Bool { self != .asIs }
 
-    /// Shown in the pill while the transform runs, so a five-second wait says what it's
-    /// doing rather than showing a frozen pill.
-    public var statusLabel: String {
-        switch self {
-        case .asIs: "Reading…"
-        case .summarize: "Summarizing…"
-        case .toThePoint: "Cutting it down…"
-        case .concise: "Tightening…"
-        case .bullets: "Listing the points…"
-        case .articulate, .articulateWithExample: "Rewriting…"
-        case .giveExample: "Finding an example…"
-        case .makeMeUnderstand: "Explaining…"
-        case .explainLikeImFive: "Simplifying…"
-        case .custom: "Rewriting…"
-        }
-    }
+    /// What the pill says while this mode's transform runs.
+    ///
+    /// One word for every mode, deliberately. Per-mode phrasing ("Cutting it down…",
+    /// "Finding an example…") was longer than the pill and told the user something they
+    /// already knew — they picked the mode a second ago. What they actually want to know is
+    /// that it is working, which the spinner says in no space at all.
+    public static let workingKeyword = "Thinking"
+
+    /// Shown while a networked voice renders audio, after the text is back.
+    public static let voicingKeyword = "Voicing"
 
     public var systemPrompt: String { Self.preamble + "\n\n" + instruction }
 
@@ -140,6 +139,16 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             and the asides. Aim for about a tenth of the length. Lead with what the passage \
             is actually about, so the first sentence already tells the listener whether \
             they need the rest.
+            """
+        case .oneLine:
+            """
+            Reduce the passage to ONE sentence. Not two, and not one sentence with a \
+            semicolon doing the work of two. However long the passage is, the answer is a \
+            single sentence that someone could repeat from memory.
+
+            Say what the passage is actually about and what it concludes. Where you cannot \
+            fit both, keep the conclusion. Do not begin with "This passage" or "The text" — \
+            state the thing itself.
             """
         case .toThePoint:
             """

@@ -24,19 +24,21 @@ final class HUDPanel: NSPanel {
         )
     }
 
-    /// The read-aloud capsule's width.
+    /// The read-aloud capsule. One size, always — it never resizes under the pointer.
     ///
-    /// Narrower than Full, because read aloud has no transcript to show — just two short
-    /// menus between two discs — and a 300pt bar of mostly empty capsule sits over what you
-    /// are trying to read. 230 fits the longest mode name ("With example") beside the
-    /// widest speed ("1.75×") without either truncating.
+    /// Far narrower than either dictation size, because read aloud has nothing long to
+    /// show: two short menus between two discs. A wider capsule would be mostly empty, and
+    /// this one appears unasked over whatever you are trying to read.
     ///
-    /// Messages are the exception and borrow Full's width: an error names what failed
-    /// ("ElevenLabs rejected the key — check it in Settings.") and is the one thing here
-    /// worth widening the pill for.
-    static func readAloudPillWidth(isMessage: Bool) -> CGFloat {
-        isMessage ? HUDSize.full.pillSize.width : 230
-    }
+    /// Everything that appears here is sized to fit, rather than the capsule growing to fit
+    /// it. That is why the working state is a spinner on the disc instead of a sentence,
+    /// and why failures read "Bad key" rather than naming what to do about it — a capsule
+    /// that jumps wider the moment something goes wrong draws the eye to the resize instead
+    /// of to the words.
+    static let readAloudPillSize = CGSize(width: 186, height: 30)
+
+    /// Smaller than Full's discs, in proportion to the shorter capsule.
+    static let readAloudControlSize: CGFloat = 20
 
     /// Read in `present()` to decide whether this pill needs to be full-sized for a
     /// notice or read aloud. Stored rather than reaching for a shared singleton so the
@@ -113,9 +115,8 @@ final class HUDPanel: NSPanel {
         let size: CGSize
         if controller.showsReadAloudButton {
             size = CGSize(
-                width: Self.readAloudPillWidth(isMessage: controller.isReadAloudMessage)
-                    + Self.shadowMargin * 2,
-                height: HUDSize.full.pillSize.height + Self.shadowMargin * 2
+                width: Self.readAloudPillSize.width + Self.shadowMargin * 2,
+                height: Self.readAloudPillSize.height + Self.shadowMargin * 2
             )
         } else {
             size = Self.panelSize(for: controller.needsFullHUD ? .full : Settings.shared.hudSize)

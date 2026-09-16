@@ -21,6 +21,16 @@ public enum OnDemandRewrite {
         /// No API key and no on-device model.
         case nothingAvailable
 
+        /// Two words for the read-aloud capsule, which has room for a mode name and no
+        /// more. The sentence version below is for the wider notice pill, where a
+        /// right-click rewrite has space to say what to do about it.
+        public var keyword: String {
+            switch self {
+            case .turnedOff: "AI off"
+            case .nothingAvailable: "No key"
+            }
+        }
+
         /// Shown in the HUD pill, which is one line wide. Keep it short.
         public var summary: String {
             switch self {
