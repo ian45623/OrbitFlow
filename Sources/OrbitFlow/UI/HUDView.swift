@@ -4,12 +4,13 @@ import SwiftUI
 /// The floating capsule that appears while you're dictating.
 ///
 /// This is the surface you actually see — a few seconds at a time, dozens of times a day,
-/// floating over whatever you're really working in. A dark capsule with two discs: discard
-/// confirm on the left, discard on the right, the level trace between them — the same hand
-/// finds accept and dismiss in the same places everywhere in this app. Two sizes, because that
+/// floating over whatever you're really working in. A dark capsule with two discs: confirm
+/// on the left, discard on the right, the level trace between them — the same hand finds
+/// accept and dismiss in the same places everywhere in this app. Two sizes, because that
 /// trade is a real preference and not a default — **compact** only confirms it's hearing
-/// you, **full** also shows the transcript as it resolves. When read aloud offers highlighted
-/// text, or anything is being spoken, the same capsule carries ▶/■, the reading mode and ✕.
+/// you, **full** also shows the transcript as it resolves. When read aloud offers
+/// highlighted text, or anything is being spoken, the same capsule carries ▶/■, the reading
+/// mode and ✕.
 struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
