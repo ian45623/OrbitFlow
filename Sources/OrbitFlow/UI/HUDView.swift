@@ -4,10 +4,11 @@ import SwiftUI
 ///
 /// This is the surface you actually see — a few seconds at a time, dozens of times a day,
 /// floating over whatever you're really working in. A dark capsule with two discs: discard
-/// on the left, confirm on the right, the level trace between them. Two sizes, because that
+/// confirm on the left, discard on the right, the level trace between them — the same hand
+/// finds accept and dismiss in the same places everywhere in this app. Two sizes, because that
 /// trade is a real preference and not a default — **compact** only confirms it's hearing
 /// you, **full** also shows the transcript as it resolves. When read aloud offers highlighted
-/// text, or anything is being spoken, the same capsule shows ✕, the text, and ▶ or ■ instead.
+/// text, or anything is being spoken, it shrinks to a lone ▶ or ■ disc instead.
 struct HUDView: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
@@ -22,8 +23,12 @@ struct HUDView: View {
     private var isListening: Bool { controller.state.isActive }
 
     var body: some View {
+        if controller.showsReadAloudButton { readAloudButton } else { dictationPill }
+    }
+
+    private var dictationPill: some View {
         HStack(spacing: DS.Space.snug) {
-            if isReadingAloud { readAloudControls } else { dictationControls }
+            dictationControls
         }
         .padding(.horizontal, DS.Space.tight)
         .frame(width: hud.pillSize.width, height: hud.pillSize.height)
@@ -50,15 +55,7 @@ struct HUDView: View {
 
     @ViewBuilder
     private var dictationControls: some View {
-        // A notice can cover speech that is still playing, and then there is no recording
-        // for ✕ to discard — only the voice to stop.
-        HUDButton(kind: .discard, size: hud.controlSize) {
-            if controller.state.isActive {
-                controller.discard()
-            } else {
-                controller.stopReadingAloud()
-            }
-        }
+        HUDButton(kind: .confirm, size: hud.controlSize) { controller.stopAndInsert() }
 
         Waveform(
             level: controller.level,
@@ -77,37 +74,35 @@ struct HUDView: View {
                 .animation(DS.Motion.press, value: controller.transcript)
         }
 
-        HUDButton(kind: .confirm, size: hud.controlSize) { controller.stopAndInsert() }
-    }
-
-    /// ✕, the text, and ▶ for an offer or ■ while reading. No waveform: there's no
-    /// microphone level to draw, and a flat trace next to a voice reads as broken.
-    @ViewBuilder
-    private var readAloudControls: some View {
-        HUDButton(kind: .discard, size: hud.controlSize, help: "Stop and dismiss") {
-            controller.stopReadingAloud()
-        }
-
-        // Tail-truncated, unlike the transcript: what matters here is where the passage
-        // starts, so you can tell which one you highlighted.
-        Text(controller.readAloudOffer ?? speaker.text ?? "")
-            .font(DS.Font.prose)
-            .foregroundStyle(DS.Color.inkOnHUD)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-        if controller.readAloudOffer != nil {
-            HUDButton(kind: .play, size: hud.controlSize) { controller.readAloud() }
-        } else {
-            HUDButton(kind: .stop, size: hud.controlSize) { controller.stopReadingAloud() }
+        // A notice can cover speech that is still playing, and then there is no recording
+        // for ✕ to discard — only the voice to stop.
+        HUDButton(kind: .discard, size: hud.controlSize) {
+            if controller.state.isActive {
+                controller.discard()
+            } else {
+                controller.stopReadingAloud()
+            }
         }
     }
 
-    /// Anything the pill already had a job for takes precedence over reading aloud.
-    private var isReadingAloud: Bool {
-        !isListening && controller.notice == nil && !controller.isRewriting
-            && controller.isReadAloudShowing
+    /// Read aloud is a single round button — ▶ for an offer, ■ while speaking — with no
+    /// words. It appears after nearly every selection, over whatever the user is reading,
+    /// so it has to be small enough to ignore; the text is already on their screen.
+    private var readAloudButton: some View {
+        let diameter = HUDPanel.readAloudDiameter
+        return Group {
+            if controller.readAloudOffer != nil {
+                HUDButton(kind: .play, size: diameter) { controller.readAloud() }
+            } else {
+                HUDButton(kind: .stop, size: diameter) { controller.stopReadingAloud() }
+            }
+        }
+        // The disc is the whole pill here, so it carries the capsule's shadow itself —
+        // without it there is nothing to lift it off the page underneath.
+        .shadow(color: DS.Shadow.hud.color, radius: DS.Shadow.hud.radius, y: DS.Shadow.hud.y)
+        // Holding the pointer over an offer keeps it from fading while you decide.
+        .onHover { controller.setHoveringReadAloud($0) }
+        .padding(HUDPanel.shadowMargin)
     }
 
     private var isError: Bool {
