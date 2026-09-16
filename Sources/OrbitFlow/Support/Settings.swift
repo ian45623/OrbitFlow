@@ -177,9 +177,14 @@ final class Settings {
         didSet { defaults.set(readAloudVoice, forKey: Keys.readAloudVoice) }
     }
 
-    /// `AVSpeechUtterance.rate`, where `AVSpeechUtteranceDefaultSpeechRate` is normal speed.
-    var readAloudRate: Float {
-        didSet { defaults.set(readAloudRate, forKey: Keys.readAloudRate) }
+    /// How fast the voice reads, as a multiple of its natural rate.
+    ///
+    /// One setting for both engines, because it is applied as a playback rate rather than
+    /// asked of the synthesizer or of ElevenLabs — see `ReadingMode.speeds`. It replaced a
+    /// pair of sliders (an `AVSpeechUtterance` rate and ElevenLabs' own `speed`) that
+    /// disagreed about what "1.5×" meant and could not both be shown on the pill.
+    var readAloudSpeed: Double {
+        didSet { defaults.set(readAloudSpeed, forKey: Keys.readAloudSpeed) }
     }
 
     /// How the selection is transformed before it is spoken.
@@ -227,11 +232,6 @@ final class Settings {
         didSet { defaults.set(elevenLabsModel, forKey: Keys.elevenLabsModel) }
     }
 
-    /// 0.7–1.2 at the API; values outside that are rejected.
-    var elevenLabsSpeed: Double {
-        didSet { defaults.set(elevenLabsSpeed, forKey: Keys.elevenLabsSpeed) }
-    }
-
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -256,7 +256,7 @@ final class Settings {
         static let hudSize = "hudSize"
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
-        static let readAloudRate = "readAloudRate"
+        static let readAloudSpeed = "readAloudSpeed"
         static let readingMode = "readingMode"
         static let readingModeCustomLabel = "readingModeCustomLabel"
         static let readingModeCustomInstruction = "readingModeCustomInstruction"
@@ -265,7 +265,6 @@ final class Settings {
         static let readAloudEngine = "readAloudEngine"
         static let elevenLabsVoiceID = "elevenLabsVoiceID"
         static let elevenLabsModel = "elevenLabsModel"
-        static let elevenLabsSpeed = "elevenLabsSpeed"
     }
 
     private init() {
@@ -321,8 +320,8 @@ final class Settings {
         // Through NSNumber, not `as? Float`: UserDefaults hands a stored number back as
         // NSNumber, and bridging that straight to Float fails for any value it can't
         // represent exactly — which would silently reset the speed on every launch.
-        readAloudRate = (defaults.object(forKey: Keys.readAloudRate) as? NSNumber)?.floatValue
-            ?? AVSpeechUtteranceDefaultSpeechRate
+        readAloudSpeed = (defaults.object(forKey: Keys.readAloudSpeed) as? NSNumber)?
+            .doubleValue ?? 1.0
 
         readingMode = ReadingMode(rawValue: defaults.string(forKey: Keys.readingMode) ?? "")
             ?? .asIs
@@ -338,8 +337,6 @@ final class Settings {
             ?? .system
         elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
         elevenLabsModel = defaults.string(forKey: Keys.elevenLabsModel) ?? ElevenLabs.defaultModel
-        elevenLabsSpeed = (defaults.object(forKey: Keys.elevenLabsSpeed) as? NSNumber)?
-            .doubleValue ?? 1.0
 
         // `didSet` does not fire during initialization, so without these two writes the
         // migration above would re-run on every launch and a legacy `cloud` string would

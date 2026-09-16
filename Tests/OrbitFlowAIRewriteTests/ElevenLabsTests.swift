@@ -17,7 +17,7 @@ struct ElevenLabsTests {
     func speechRequest() {
         let request = ElevenLabs.speechRequest(
             voiceID: "voice123", key: key, model: "eleven_flash_v2_5",
-            text: "Hello there", speed: 1.1
+            text: "Hello there"
         )
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString
@@ -28,8 +28,9 @@ struct ElevenLabsTests {
         let sent = body(request)
         #expect(sent["text"] as? String == "Hello there")
         #expect(sent["model_id"] as? String == "eleven_flash_v2_5")
-        let settings = sent["voice_settings"] as? [String: Any]
-        #expect(settings?["speed"] as? Double == 1.1)
+        // No voice_settings: the voice's own saved defaults apply, and speed is a playback
+        // concern because the API caps it at 1.2 while the app's menu goes to 2×.
+        #expect(sent["voice_settings"] == nil)
     }
 
     /// A key in a URL ends up in logs, crash reports and proxy access logs. It belongs in
@@ -37,8 +38,7 @@ struct ElevenLabsTests {
     @Test("The key never appears in a URL or a request body")
     func keyStaysInTheHeader() {
         let requests = [
-            ElevenLabs.speechRequest(
-                voiceID: "v", key: key, model: "m", text: "t", speed: 1.0),
+            ElevenLabs.speechRequest(voiceID: "v", key: key, model: "m", text: "t"),
             ElevenLabs.voicesRequest(key: key),
             ElevenLabs.modelsRequest(key: key),
         ]

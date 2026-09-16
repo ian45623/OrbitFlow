@@ -30,7 +30,7 @@ struct ReadingModeTests {
         let prompts = ReadingMode.allCases
             .filter { $0.usesAI && $0 != .custom }
             .map(\.systemPrompt)
-        #expect(prompts.count == 7)
+        #expect(prompts.count == 9)
         #expect(Set(prompts).count == prompts.count)
         #expect(prompts.allSatisfy { !$0.isEmpty })
     }
@@ -51,6 +51,40 @@ struct ReadingModeTests {
         for mode in ReadingMode.allCases where mode != .asIs {
             #expect(mode.usesAI)
         }
+    }
+
+    /// Bullets is spoken, not rendered. A synthesizer reads "-" as "hyphen" and "*" as
+    /// "asterisk", so the one mode that produces a list must explicitly forbid list markers.
+    @Test("The bullets mode forbids the characters a voice would read out")
+    func bulletsForbidsMarkers() {
+        let prompt = ReadingMode.bullets.systemPrompt
+        #expect(prompt.contains("Do NOT write bullet"))
+        #expect(prompt.contains("asterisk"))
+    }
+
+    /// The whole point of the mode: a page has to come out shorter than the summary does.
+    @Test("To the point asks for a hard ceiling, not just brevity")
+    func toThePointHasACeiling() {
+        #expect(ReadingMode.toThePoint.systemPrompt.contains("at most three sentences"))
+    }
+
+    /// "1.0×" reads as a setting someone fiddled with; "1×" reads as normal.
+    @Test("Speed labels drop a trailing .0 and keep real fractions")
+    func speedLabels() {
+        #expect(ReadingMode.speedLabel(1) == "1×")
+        #expect(ReadingMode.speedLabel(2) == "2×")
+        #expect(ReadingMode.speedLabel(1.25) == "1.25×")
+        #expect(ReadingMode.speedLabel(0.75) == "0.75×")
+        #expect(ReadingMode.speedLabel(1.5) == "1.5×")
+    }
+
+    /// Both ends are load-bearing: below 0.5 or above 2.0 `AVAudioPlayer.rate` is out of
+    /// its documented range, and ElevenLabs audio would simply not play.
+    @Test("Every offered speed is one AVAudioPlayer can actually play")
+    func speedsArePlayable() {
+        #expect(ReadingMode.speeds.allSatisfy { $0 >= 0.5 && $0 <= 2.0 })
+        #expect(ReadingMode.speeds.contains(1))
+        #expect(ReadingMode.speeds == ReadingMode.speeds.sorted())
     }
 
     /// The user's instruction replaces the body, never the preamble. A user asking for

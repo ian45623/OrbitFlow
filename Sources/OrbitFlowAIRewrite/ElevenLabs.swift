@@ -41,16 +41,16 @@ public enum ElevenLabs {
         return request
     }
 
-    /// - Parameter speed: 0.7–1.2 at the API. Passed inside `voice_settings`; the other
-    ///   settings (stability, similarity_boost, style) are omitted so the voice's own
-    ///   saved defaults apply — overriding them here would silently ignore what the user
-    ///   tuned on the ElevenLabs site.
+    /// No `voice_settings` at all: the voice's own saved defaults apply, so what the user
+    /// tuned on the ElevenLabs site is what they hear. Speed in particular is deliberately
+    /// absent — the API accepts only 0.7–1.2 there, while the app's speed menu goes to 2×,
+    /// so it is applied on playback instead (`AVAudioPlayer.rate`). That also means the
+    /// rendered bytes are speed-independent and one render serves every speed.
     public static func speechRequest(
         voiceID: String,
         key: String,
         model: String,
-        text: String,
-        speed: Double
+        text: String
     ) -> URLRequest {
         var request = authorized(
             base.appending(path: "v1/text-to-speech").appending(path: voiceID),
@@ -61,7 +61,6 @@ public enum ElevenLabs {
         let body: [String: Any] = [
             "text": text,
             "model_id": model,
-            "voice_settings": ["speed": speed],
         ]
         // .sortedKeys so the golden-body test is deterministic, matching AIProvider.
         request.httpBody = try? JSONSerialization.data(

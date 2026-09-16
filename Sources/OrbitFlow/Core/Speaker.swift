@@ -29,6 +29,14 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// `speak` or `stop`.
     private(set) var failure: String?
 
+    /// What is currently being spoken, or nil when nothing is.
+    ///
+    /// Exists for one caller: changing the speed mid-passage has to restart it, because
+    /// both `AVSpeechUtterance.rate` and `AVAudioPlayer.rate` are fixed for the life of the
+    /// thing playing. The pill does not display this — it shows the mode and speed menus —
+    /// so nothing else should reach for it.
+    private(set) var spokenText: String?
+
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var fetch: Task<Void, Never>?
@@ -50,6 +58,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     func speak(_ text: String) {
         stop()
+        spokenText = text
 
         switch Settings.shared.readAloudEngine {
         case .system:
@@ -57,7 +66,17 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             let settings = Settings.shared
             utterance.voice = settings.readAloudVoice
                 .flatMap { AVSpeechSynthesisVoice(identifier: $0) }
-            utterance.rate = settings.readAloudRate
+            // The multiplier scales the *default* rate rather than spanning the property's
+            // full 0...1, because AVSpeechUtterance's range is not perceptually linear:
+            // `maxSpeechRate` is far past intelligible, so mapping 2× onto it would make the
+            // top of the menu useless. Clamped, since default × 2 can overflow the range.
+            utterance.rate = min(
+                max(
+                    AVSpeechUtteranceDefaultSpeechRate * Float(settings.readAloudSpeed),
+                    AVSpeechUtteranceMinimumSpeechRate
+                ),
+                AVSpeechUtteranceMaximumSpeechRate
+            )
             isSpeaking = true
             synthesizer.speak(utterance)
 
@@ -83,6 +102,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         failure = nil
         isPreparing = false
         isSpeaking = false
+        spokenText = nil
         synthesizer.stopSpeaking(at: .immediate)
     }
 
@@ -98,7 +118,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             return fail("Add your ElevenLabs key in Settings.")
         }
 
-        let key = "\(voiceID)\u{1}\(settings.elevenLabsModel)\u{1}\(settings.elevenLabsSpeed)\u{1}\(text)"
+        // Speed is deliberately NOT part of the key: it is applied on playback, so the same
+        // bytes serve every speed. Changing the menu replays instantly and bills nothing.
+        let key = "\(voiceID)\u{1}\(settings.elevenLabsModel)\u{1}\(text)"
         if let data = rendered[key] {
             return playRendered(data)
         }
@@ -107,8 +129,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             voiceID: voiceID,
             key: apiKey,
             model: settings.elevenLabsModel,
-            text: text,
-            speed: settings.elevenLabsSpeed
+            text: text
         )
 
         isPreparing = true
@@ -153,7 +174,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             return fail("ElevenLabs returned audio we couldn't play.")
         }
         player.delegate = self
-        player.enableRate = false
+        // `rate` is the one place the speed menu reaches ElevenLabs audio: the API's own
+        // `speed` parameter tops out at 1.2, so anything brisker has to happen here. Must be
+        // set after `enableRate` and before `play()`.
+        player.enableRate = true
+        player.rate = Float(Settings.shared.readAloudSpeed)
         guard player.play() else {
             return fail("ElevenLabs returned audio we couldn't play.")
         }
@@ -190,6 +215,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     }
 
     private func fail(_ message: String) {
+        spokenText = nil
         player = nil
         isPreparing = false
         isSpeaking = false
@@ -223,6 +249,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         // finished before a sound is ever made.
         guard !synthesizer.isSpeaking, !isPreparing, player == nil else { return }
         isSpeaking = false
+        spokenText = nil
     }
 
     // MARK: - AVAudioPlayerDelegate
@@ -243,6 +270,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             else { return }
             self.player = nil
             self.isSpeaking = false
+            self.spokenText = nil
         }
     }
 }

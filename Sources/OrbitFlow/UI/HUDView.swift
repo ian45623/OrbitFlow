@@ -113,12 +113,20 @@ struct HUDView: View {
 
             readAloudCentre
 
+            // Speed sits next to the mode because they are the same kind of decision — how
+            // you want this passage delivered — and both are things you change on the
+            // passage in front of you, not in a settings window.
+            if controller.readAloudError == nil, controller.readAloudStatus == nil {
+                speedMenu
+            }
+
             HUDButton(kind: .discard, size: HUDSize.full.controlSize) {
                 controller.stopReadingAloud()
             }
         }
         .padding(.horizontal, DS.Space.tight)
-        .frame(width: HUDSize.full.pillSize.width, height: HUDSize.full.pillSize.height)
+        .frame(width: HUDPanel.readAloudPillWidth(isMessage: controller.isReadAloudMessage),
+               height: HUDSize.full.pillSize.height)
         .background {
             let shape = RoundedRectangle(
                 cornerRadius: min(DS.Radius.hud, HUDSize.full.pillSize.height / 2),
@@ -169,6 +177,32 @@ struct HUDView: View {
         } else {
             modeMenu
         }
+    }
+
+    /// How fast it reads, as a multiple. One control for both engines: it is applied on
+    /// playback, so it costs nothing and re-renders nothing to change mid-passage.
+    private var speedMenu: some View {
+        Menu {
+            ForEach(ReadingMode.speeds, id: \.self) { speed in
+                Button {
+                    controller.setReadingSpeed(speed)
+                } label: {
+                    if speed == settings.readAloudSpeed {
+                        Label(ReadingMode.speedLabel(speed), systemImage: "checkmark")
+                    } else {
+                        Text(ReadingMode.speedLabel(speed))
+                    }
+                }
+            }
+        } label: {
+            Text(ReadingMode.speedLabel(settings.readAloudSpeed))
+                .font(DS.Font.body)
+                .foregroundStyle(DS.Color.inkOnHUDMuted)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     /// A plain SwiftUI `Menu`. Native, so it survives being opened over another app's

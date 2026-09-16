@@ -524,11 +524,7 @@ struct SettingsPanel: View {
 
                 FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
                 HStack(spacing: DS.Space.base) {
-                    // Narrower than AVSpeech's full 0…1: the ends of that range are too slow
-                    // and too fast to follow, and a slider mostly made of unusable positions is
-                    // hard to set.
-                    // ponytail: fixed range, widen it if someone asks for faster listening.
-                    Slider(value: $settings.readAloudRate, in: 0.3...0.75)
+                    speedPicker
                     // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
                     // before a sound is made, and a second press during that window would
                     // cancel a request already billed and send a duplicate.
@@ -554,6 +550,22 @@ struct SettingsPanel: View {
             // The tap only listens for mouse-ups while the feature is on.
             controller.reloadHotkey()
         }
+    }
+
+    /// One speed control for both engines, mirroring the pill's menu.
+    ///
+    /// It replaced a pair of sliders — an `AVSpeechUtterance` rate and ElevenLabs' own
+    /// `speed` — that were measured in different units, so "the same speed" on one engine
+    /// was a different speed on the other. A multiple of natural pace means the same thing
+    /// whichever voice is talking, and it is the only form that fits on the pill.
+    private var speedPicker: some View {
+        Picker("Speed", selection: $settings.readAloudSpeed) {
+            ForEach(ReadingMode.speeds, id: \.self) { speed in
+                Text(ReadingMode.speedLabel(speed)).tag(speed)
+            }
+        }
+        .labelsHidden()
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -607,10 +619,8 @@ struct SettingsPanel: View {
         }
         note("Flash is the fastest and about half the credit cost.")
 
-        // The API rejects values outside this band.
-        Slider(value: $settings.elevenLabsSpeed, in: 0.7...1.2) {
-            Text("Speed")
-        }
+        FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
+        speedPicker
         // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns before a
         // sound is made, and a second press during that window would cancel a request
         // already billed and send a duplicate.

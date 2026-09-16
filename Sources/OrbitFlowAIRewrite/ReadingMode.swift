@@ -14,7 +14,10 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     /// is the default so the feature costs nothing until the user asks it to.
     case asIs
     case summarize
+    /// The whole page in a few sentences. The shortest mode there is.
+    case toThePoint
     case concise
+    case bullets
     case articulate
     case articulateWithExample
     case giveExample
@@ -26,14 +29,16 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     public var displayName: String {
         switch self {
         case .asIs: "As-is"
-        case .summarize: "Summarize"
-        case .concise: "Concise"
-        case .articulate: "Articulate"
-        case .articulateWithExample: "Articulate with an example"
-        case .giveExample: "Give me an example"
-        case .makeMeUnderstand: "Make me understand"
-        case .explainLikeImFive: "Explain like I'm five"
-        case .custom: "Custom…"
+        case .summarize: "Summary"
+        case .toThePoint: "To the point"
+        case .concise: "Shorter"
+        case .bullets: "Bullets"
+        case .articulate: "Clearer"
+        case .articulateWithExample: "With example"
+        case .giveExample: "Example"
+        case .makeMeUnderstand: "Explain"
+        case .explainLikeImFive: "Simple"
+        case .custom: "Custom"
         }
     }
 
@@ -44,8 +49,12 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             "Reads exactly what you highlighted. Sends nothing to an AI."
         case .summarize:
             "Every main point, much shorter. The whole page in under a minute."
+        case .toThePoint:
+            "A whole page in three lines. Only what you'd repeat to someone else."
         case .concise:
             "The same content with the padding cut. Not a summary."
+        case .bullets:
+            "Broken into short points, one idea each, with a pause between them."
         case .articulate:
             "Reordered into a clear argument — the point first, then what supports it."
         case .articulateWithExample:
@@ -71,7 +80,9 @@ public enum ReadingMode: String, CaseIterable, Sendable {
         switch self {
         case .asIs: "Reading…"
         case .summarize: "Summarizing…"
+        case .toThePoint: "Cutting it down…"
         case .concise: "Tightening…"
+        case .bullets: "Listing the points…"
         case .articulate, .articulateWithExample: "Rewriting…"
         case .giveExample: "Finding an example…"
         case .makeMeUnderstand: "Explaining…"
@@ -130,6 +141,26 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             is actually about, so the first sentence already tells the listener whether \
             they need the rest.
             """
+        case .toThePoint:
+            """
+            Reduce the passage to its irreducible core: at most three sentences, or one \
+            short paragraph, however long the original was. Keep only what someone would \
+            repeat to a colleague who asked "what did it say?" — the conclusion and the one \
+            or two facts it rests on. Drop everything else, including nuance and caveats. \
+            If the passage has no single point, say what it is about and stop.
+            """
+        case .bullets:
+            """
+            Break the passage into short points, one idea each, in the order they matter. \
+            Every point must stand on its own read aloud, without the ones around it. Aim \
+            for a handful, not a transcript — if it needs more than about eight, the points \
+            are too fine-grained and should be merged.
+
+            Write each point as a plain sentence on its own line. Do NOT write bullet \
+            characters, dashes, numbers or any other list marker at the start of a line: \
+            this text is spoken, and a synthesizer reads those out loud as "asterisk" or \
+            "hyphen". The line breaks are what make it a list.
+            """
         case .concise:
             """
             Keep all of the passage's content and its order, but cut the padding: \
@@ -176,6 +207,24 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             // Never used — callers build the custom prompt with `customSystemPrompt`.
             ""
         }
+    }
+
+    /// How fast the voice reads, as a multiple of its natural rate.
+    ///
+    /// Applied as a *playback* rate rather than asked of the engine, which is what lets one
+    /// setting drive both backends: ElevenLabs' own `speed` parameter only accepts 0.7–1.2,
+    /// so anything brisker than 1.2× could not be expressed that way at all. Capped at 2×
+    /// because `AVAudioPlayer.rate` is documented for 0.5–2.0; past that needs a real audio
+    /// graph (`AVAudioUnitTimePitch`), which is a lot of machinery for one menu row.
+    public static let speeds: [Double] = [0.75, 1, 1.25, 1.5, 1.75, 2]
+
+    /// "1.5×" — trailing ".0" dropped so the common case reads "1×", not "1.0×".
+    public static func speedLabel(_ speed: Double) -> String {
+        let rounded = (speed * 100).rounded() / 100
+        let text = rounded == rounded.rounded()
+            ? String(Int(rounded))
+            : String(format: "%g", rounded)
+        return text + "×"
     }
 
     // MARK: - Length confirm

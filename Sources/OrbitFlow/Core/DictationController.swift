@@ -126,6 +126,16 @@ final class DictationController {
             || Speaker.shared.failure != nil
     }
 
+    /// True when the read-aloud capsule is carrying words rather than its two menus.
+    ///
+    /// Lives here rather than in the view because `HUDPanel` sizes the window from it and
+    /// `HUDView` draws the capsule from it: if the two disagreed by even one term, the
+    /// NSPanel's bounds and what SwiftUI draws inside it would not match, and the capsule
+    /// would be clipped or float in a larger transparent window that still eats clicks.
+    var isReadAloudMessage: Bool {
+        readAloudError != nil || readAloudStatus != nil || Speaker.shared.failure != nil
+    }
+
     /// Whether the pill needs full width right now regardless of the Compact setting.
     ///
     /// A notice — a refusal, a failure, "also copied to clipboard" — is the on-demand
@@ -694,6 +704,23 @@ final class DictationController {
         lengthConfirmed = false
         readAloudRunID = nil
         Speaker.shared.stop()
+    }
+
+    /// The capsule's speed menu.
+    ///
+    /// Unlike the mode, this needs no re-transform and no re-render: speed is applied on
+    /// playback, so the change is free. It still restarts the passage, because
+    /// `AVSpeechUtterance.rate` and `AVAudioPlayer.rate` are both fixed for the life of the
+    /// thing playing — there is no way to change either mid-sentence. The ElevenLabs audio
+    /// comes straight back out of the cache, so restarting costs nothing.
+    func setReadingSpeed(_ speed: Double) {
+        guard speed != Settings.shared.readAloudSpeed else { return }
+        Settings.shared.readAloudSpeed = speed
+
+        guard Speaker.shared.isSpeaking || Speaker.shared.isPreparing,
+              let text = Speaker.shared.spokenText
+        else { return }
+        Speaker.shared.speak(text)
     }
 
     /// The capsule's mode menu. A live control, not a preference for next time: change it

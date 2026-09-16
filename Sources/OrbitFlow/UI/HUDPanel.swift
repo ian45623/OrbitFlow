@@ -24,6 +24,20 @@ final class HUDPanel: NSPanel {
         )
     }
 
+    /// The read-aloud capsule's width.
+    ///
+    /// Narrower than Full, because read aloud has no transcript to show — just two short
+    /// menus between two discs — and a 300pt bar of mostly empty capsule sits over what you
+    /// are trying to read. 230 fits the longest mode name ("With example") beside the
+    /// widest speed ("1.75×") without either truncating.
+    ///
+    /// Messages are the exception and borrow Full's width: an error names what failed
+    /// ("ElevenLabs rejected the key — check it in Settings.") and is the one thing here
+    /// worth widening the pill for.
+    static func readAloudPillWidth(isMessage: Bool) -> CGFloat {
+        isMessage ? HUDSize.full.pillSize.width : 230
+    }
+
     /// Read in `present()` to decide whether this pill needs to be full-sized for a
     /// notice or read aloud. Stored rather than reaching for a shared singleton so the
     /// panel doesn't need to know how the controller it was handed relates to anything else.
@@ -94,13 +108,18 @@ final class HUDPanel: NSPanel {
     static let dockGap: CGFloat = 40
 
     func present() {
-        // Read aloud borrows Full's capsule: it now carries three controls and a mode
-        // menu, which is exactly what Full was already sized for.
-        let size = Self.panelSize(
-            for: controller.showsReadAloudButton || controller.needsFullHUD
-                ? .full
-                : Settings.shared.hudSize
-        )
+        // Read aloud sizes itself: narrow for the two menus, Full's width for a message.
+        // Everything else is the pill-size setting, or Full when a notice overrides it.
+        let size: CGSize
+        if controller.showsReadAloudButton {
+            size = CGSize(
+                width: Self.readAloudPillWidth(isMessage: controller.isReadAloudMessage)
+                    + Self.shadowMargin * 2,
+                height: HUDSize.full.pillSize.height + Self.shadowMargin * 2
+            )
+        } else {
+            size = Self.panelSize(for: controller.needsFullHUD ? .full : Settings.shared.hudSize)
+        }
 
         // Every active state change (starting → listening → finishing) calls this. Without
         // the early exit the panel would reset to alpha 0 and re-fade on each one, which
