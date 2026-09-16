@@ -716,8 +716,12 @@ final class DictationController {
         transformToken = UUID()
         readAloudStatus = nil
 
+        // Through `begin`, not straight to the transform: the ≥2,000-word confirm lives
+        // there, and switching to As-is mid-playback is exactly how a whole page reaches
+        // the voice without being asked about. `begin` files no second run for a passage
+        // it has already filed.
         guard wasSpeaking, let source else { return }
-        transformAndSpeak(source, mode: mode)
+        begin(source)
     }
 
     private func mouseReleased(isGesture: Bool) {

@@ -33,13 +33,15 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var fetch: Task<Void, Never>?
 
-    /// The last MP3 ElevenLabs rendered, and the voice, model, speed and text that produced
-    /// it. Cycling modes and coming back to one you already heard is the case this exists
-    /// for: the transform is already cached, and re-rendering the identical audio would be
-    /// a second charge for a file we are still holding. One entry — that covers "switch
-    /// mode and switch back" and needs no eviction policy. The settings are part of the key
-    /// rather than an invalidation step, so picking a new voice cannot replay the old one.
-    @ObservationIgnored private var rendered: (key: String, data: Data)?
+    /// MP3s ElevenLabs has already rendered, keyed by the voice, model, speed and text that
+    /// produced each one. Cycling modes and coming back to one you already heard is the case
+    /// this exists for: the transform is already cached, and re-rendering identical audio
+    /// would be a second charge for a file we are still holding. Keeping only the last one
+    /// would evict A the moment B is heard — which is the switch-back this is for. Emptied
+    /// wholesale above a handful of entries rather than evicting by age: one passage can
+    /// only produce nine, and the settings are part of the key rather than an invalidation
+    /// step, so picking a new voice cannot replay the old one.
+    @ObservationIgnored private var rendered: [String: Data] = [:]
 
     private override init() {
         super.init()
@@ -97,8 +99,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         }
 
         let key = "\(voiceID)\u{1}\(settings.elevenLabsModel)\u{1}\(settings.elevenLabsSpeed)\u{1}\(text)"
-        if let rendered, rendered.key == key {
-            return playRendered(rendered.data)
+        if let data = rendered[key] {
+            return playRendered(data)
         }
 
         let request = ElevenLabs.speechRequest(
@@ -113,14 +115,20 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         fetch = Task { @MainActor in
             do {
                 let (data, response) = try await Self.session.data(for: request)
-                guard !Task.isCancelled else { return }
 
                 if let http = response as? HTTPURLResponse,
                    !(200..<300).contains(http.statusCode) {
+                    guard !Task.isCancelled else { return }
                     return fail(Self.message(for: http.statusCode, body: data))
                 }
 
-                rendered = (key, data)
+                // Kept before the cancel check: this render is billed and the bytes are in
+                // hand, so a ■ pressed while it arrived should silence it, not throw it
+                // away and make the next ▶ pay again.
+                if rendered.count >= 9 { rendered.removeAll() }
+                rendered[key] = data
+
+                guard !Task.isCancelled else { return }
                 playRendered(data)
             } catch is CancellationError {
                 return
