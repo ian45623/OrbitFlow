@@ -79,6 +79,25 @@ enum HUDSize: String, CaseIterable, Sendable {
     }
 }
 
+/// Which synthesizer speaks.
+///
+/// A setting rather than an automatic fallback: switching voice, speed and character
+/// mid-passage because a network call failed is more confusing than an error that says
+/// the key is wrong.
+enum VoiceEngine: String, CaseIterable, Sendable {
+    /// `AVSpeechSynthesizer`. Free, offline, installed voices only.
+    case system
+    /// ElevenLabs over the network, billed per character.
+    case elevenLabs
+
+    var displayName: String {
+        switch self {
+        case .system: "System"
+        case .elevenLabs: "ElevenLabs"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class Settings {
@@ -163,6 +182,56 @@ final class Settings {
         didSet { defaults.set(readAloudRate, forKey: Keys.readAloudRate) }
     }
 
+    /// How the selection is transformed before it is spoken.
+    ///
+    /// `.asIs` by default, which makes no network call at all — the feature must not start
+    /// spending the user's AI credits, or sending their selections anywhere, on an upgrade
+    /// they didn't ask for.
+    var readingMode: ReadingMode {
+        didSet { defaults.set(readingMode.rawValue, forKey: Keys.readingMode) }
+    }
+
+    var readingModeCustomLabel: String {
+        didSet { defaults.set(readingModeCustomLabel, forKey: Keys.readingModeCustomLabel) }
+    }
+
+    var readingModeCustomInstruction: String {
+        didSet {
+            defaults.set(readingModeCustomInstruction, forKey: Keys.readingModeCustomInstruction)
+        }
+    }
+
+    /// `nil` — the default — means read aloud uses `aiProvider` and `aiModel`, so no API
+    /// key is ever entered twice. Set it only to split read aloud onto a different
+    /// provider than the rewrite tier. Resolved through `AITarget.resolve`.
+    var readAloudProviderOverride: AIProvider? {
+        didSet {
+            defaults.set(readAloudProviderOverride?.rawValue, forKey: Keys.readAloudProviderOverride)
+        }
+    }
+
+    /// Read only when `readAloudProviderOverride` is set. See `AITarget.resolve`.
+    var readAloudModelOverride: String {
+        didSet { defaults.set(readAloudModelOverride, forKey: Keys.readAloudModelOverride) }
+    }
+
+    var readAloudEngine: VoiceEngine {
+        didSet { defaults.set(readAloudEngine.rawValue, forKey: Keys.readAloudEngine) }
+    }
+
+    var elevenLabsVoiceID: String {
+        didSet { defaults.set(elevenLabsVoiceID, forKey: Keys.elevenLabsVoiceID) }
+    }
+
+    var elevenLabsModel: String {
+        didSet { defaults.set(elevenLabsModel, forKey: Keys.elevenLabsModel) }
+    }
+
+    /// 0.7–1.2 at the API; values outside that are rejected.
+    var elevenLabsSpeed: Double {
+        didSet { defaults.set(elevenLabsSpeed, forKey: Keys.elevenLabsSpeed) }
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -188,6 +257,15 @@ final class Settings {
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
         static let readAloudRate = "readAloudRate"
+        static let readingMode = "readingMode"
+        static let readingModeCustomLabel = "readingModeCustomLabel"
+        static let readingModeCustomInstruction = "readingModeCustomInstruction"
+        static let readAloudProviderOverride = "readAloudProviderOverride"
+        static let readAloudModelOverride = "readAloudModelOverride"
+        static let readAloudEngine = "readAloudEngine"
+        static let elevenLabsVoiceID = "elevenLabsVoiceID"
+        static let elevenLabsModel = "elevenLabsModel"
+        static let elevenLabsSpeed = "elevenLabsSpeed"
     }
 
     private init() {
@@ -245,6 +323,23 @@ final class Settings {
         // represent exactly — which would silently reset the speed on every launch.
         readAloudRate = (defaults.object(forKey: Keys.readAloudRate) as? NSNumber)?.floatValue
             ?? AVSpeechUtteranceDefaultSpeechRate
+
+        readingMode = ReadingMode(rawValue: defaults.string(forKey: Keys.readingMode) ?? "")
+            ?? .asIs
+        readingModeCustomLabel = defaults.string(forKey: Keys.readingModeCustomLabel) ?? ""
+        readingModeCustomInstruction =
+            defaults.string(forKey: Keys.readingModeCustomInstruction) ?? ""
+        // A nil raw value is the common case — no override — and an unrecognised one means
+        // a provider that no longer exists, which is also "no override" rather than a crash.
+        readAloudProviderOverride = defaults.string(forKey: Keys.readAloudProviderOverride)
+            .flatMap { AIProvider(rawValue: $0) }
+        readAloudModelOverride = defaults.string(forKey: Keys.readAloudModelOverride) ?? ""
+        readAloudEngine = VoiceEngine(rawValue: defaults.string(forKey: Keys.readAloudEngine) ?? "")
+            ?? .system
+        elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
+        elevenLabsModel = defaults.string(forKey: Keys.elevenLabsModel) ?? ElevenLabs.defaultModel
+        elevenLabsSpeed = (defaults.object(forKey: Keys.elevenLabsSpeed) as? NSNumber)?
+            .doubleValue ?? 1.0
 
         // `didSet` does not fire during initialization, so without these two writes the
         // migration above would re-run on every launch and a legacy `cloud` string would
