@@ -24,6 +24,16 @@ struct SettingsPanel: View {
     @State private var testResult: TestResult?
     @State private var availableModels: [String] = []
 
+    @State private var hasElevenLabsKey = false
+    @State private var elevenLabsKeyField = ""
+    @State private var elevenLabsVoices: [ElevenLabs.Voice] = []
+    @State private var elevenLabsModels: [String] = []
+    @State private var elevenLabsTest: TestResult?
+    @State private var isTestingElevenLabs = false
+    /// A key for the overridden read-aloud provider, which may be one the rewrite tier
+    /// isn't using. Nil when no override is set.
+    @State private var hasOverrideKey = false
+
     /// Shared, so a download started from the menu bar — or by a first dictation —
     /// shows up here too.
     @State private var parakeet = ParakeetDownload.shared
@@ -407,59 +417,189 @@ struct SettingsPanel: View {
                 + "macOS — web pages in Chrome, Word, Cursor and VS Code — ▶ copies the "
                 + "selection to read it, then puts your clipboard back.")
 
-            Hairline()
+            Divider().padding(.vertical, DS.Space.tight)
 
-            FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
-            let voices = readAloudVoices
-            Picker("", selection: Binding(
-                // A saved voice outside the listed rows — uninstalled since, another
-                // language, a novelty voice — has no row to select, and a picker with no
-                // selection shows blank, so it shows as "System default". Only the
-                // uninstalled one really speaks as the default.
-                get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
-                set: { settings.readAloudVoice = $0 }
-            )) {
-                Text("System default").tag(String?.none)
-                ForEach(voices, id: \.identifier) { voice in
-                    Text(voiceLabel(voice)).tag(String?.some(voice.identifier))
+            Picker("Reading mode", selection: $settings.readingMode) {
+                ForEach(ReadingMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
                 }
             }
-            .labelsHidden()
-            note("Premium and Enhanced voices sound far more natural. Download them in System "
-                + "Settings ▸ Accessibility ▸ Spoken Content ▸ System voice ▸ Manage Voices.")
-            ActionButton(title: "Open Spoken Content settings", kind: .quiet) {
-                Permissions.openSpokenContentSettings()
+            note(settings.readingMode.summary)
+
+            if settings.readingMode.usesAI {
+                note("Sends the highlighted text to your AI provider before reading it.")
             }
 
-            Hairline()
+            if settings.readingMode == .custom {
+                TextField("Menu label", text: $settings.readingModeCustomLabel)
+                    .textFieldStyle(.roundedBorder)
+                TextField(
+                    "Instruction — e.g. “Rewrite this as three short takeaways.”",
+                    text: $settings.readingModeCustomInstruction,
+                    axis: .vertical
+                )
+                .lineLimit(2...5)
+                .textFieldStyle(.roundedBorder)
+                if settings.readingModeCustomInstruction
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    note("Custom stays greyed out in the pill until this has an instruction.")
+                }
+            }
 
-            FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
-            HStack(spacing: DS.Space.base) {
-                // Narrower than AVSpeech's full 0…1: the ends of that range are too slow
-                // and too fast to follow, and a slider mostly made of unusable positions is
-                // hard to set.
-                // ponytail: fixed range, widen it if someone asks for faster listening.
-                Slider(value: $settings.readAloudRate, in: 0.3...0.75)
-                // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
-                // before a sound is made, and a second press during that window would
-                // cancel a request already billed and send a duplicate.
-                ActionButton(
-                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview",
-                    kind: .secondary
-                ) {
-                    if speaker.isSpeaking || speaker.isPreparing {
-                        speaker.stop()
-                    } else {
-                        speaker.speak("This is how highlighted text will sound.")
+            if settings.readingMode.usesAI {
+                Picker("AI for reading modes", selection: $settings.readAloudProviderOverride) {
+                    Text("Same as AI rewrite (\(settings.aiProvider.displayName))")
+                        .tag(AIProvider?.none)
+                    ForEach(AIProvider.allCases, id: \.self) { provider in
+                        Text(provider.displayName).tag(AIProvider?.some(provider))
                     }
                 }
+                if let override = settings.readAloudProviderOverride {
+                    TextField(
+                        "Model",
+                        text: $settings.readAloudModelOverride,
+                        prompt: Text(override.defaultModel.isEmpty ? "Model ID" : override.defaultModel)
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    if hasOverrideKey {
+                        note("A key is saved for \(override.displayName).")
+                    } else {
+                        note("No key saved for \(override.displayName) — add one in the AI rewrite section.")
+                        Link("Get a \(override.displayName) key ↗", destination: override.keyURL)
+                            .font(DS.Font.caption)
+                    }
+                } else {
+                    note("One key covers both features. Pick OpenRouter in AI rewrite and a single key reaches every model.")
+                }
+            }
+
+            Divider().padding(.vertical, DS.Space.tight)
+
+            Picker("Voice", selection: $settings.readAloudEngine) {
+                ForEach(VoiceEngine.allCases, id: \.self) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if settings.readAloudEngine == .system {
+                Hairline()
+
+                FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
+                let voices = readAloudVoices
+                Picker("", selection: Binding(
+                    // A saved voice outside the listed rows — uninstalled since, another
+                    // language, a novelty voice — has no row to select, and a picker with no
+                    // selection shows blank, so it shows as "System default". Only the
+                    // uninstalled one really speaks as the default.
+                    get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
+                    set: { settings.readAloudVoice = $0 }
+                )) {
+                    Text("System default").tag(String?.none)
+                    ForEach(voices, id: \.identifier) { voice in
+                        Text(voiceLabel(voice)).tag(String?.some(voice.identifier))
+                    }
+                }
+                .labelsHidden()
+                note("Premium and Enhanced voices sound far more natural. Download them in System "
+                    + "Settings ▸ Accessibility ▸ Spoken Content ▸ System voice ▸ Manage Voices.")
+                ActionButton(title: "Open Spoken Content settings", kind: .quiet) {
+                    Permissions.openSpokenContentSettings()
+                }
+
+                Hairline()
+
+                FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
+                HStack(spacing: DS.Space.base) {
+                    // Narrower than AVSpeech's full 0…1: the ends of that range are too slow
+                    // and too fast to follow, and a slider mostly made of unusable positions is
+                    // hard to set.
+                    // ponytail: fixed range, widen it if someone asks for faster listening.
+                    Slider(value: $settings.readAloudRate, in: 0.3...0.75)
+                    // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
+                    // before a sound is made, and a second press during that window would
+                    // cancel a request already billed and send a duplicate.
+                    ActionButton(
+                        title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview",
+                        kind: .secondary
+                    ) {
+                        if speaker.isSpeaking || speaker.isPreparing {
+                            speaker.stop()
+                        } else {
+                            speaker.speak("This is how highlighted text will sound.")
+                        }
+                    }
+                }
+            } else {
+                elevenLabsRows
             }
         }
+        .onAppear { refreshElevenLabsKeyPresence() }
+        .onChange(of: settings.readAloudProviderOverride) { refreshElevenLabsKeyPresence() }
         .onChange(of: settings.readAloudEnabled) { _, isOn in
             if !isOn { controller.stopReadingAloud() }
             // The tap only listens for mouse-ups while the feature is on.
             controller.reloadHotkey()
         }
+    }
+
+    @ViewBuilder
+    private var elevenLabsRows: some View {
+        HStack {
+            SecureField("ElevenLabs API key", text: $elevenLabsKeyField)
+                .textFieldStyle(.roundedBorder)
+            Button("Save") { saveElevenLabsKey() }
+                .disabled(elevenLabsKeyField.isEmpty)
+            if hasElevenLabsKey {
+                Button("Remove") { removeElevenLabsKey() }
+            }
+        }
+        if hasElevenLabsKey {
+            note("A key is saved.")
+        } else {
+            Link("Get an ElevenLabs key ↗",
+                 destination: URL(string: "https://elevenlabs.io/app/settings/api-keys")!)
+                .font(DS.Font.caption)
+        }
+
+        HStack {
+            Button("Test and load voices") { loadElevenLabs() }
+                .disabled(isTestingElevenLabs || !hasElevenLabsKey)
+            if isTestingElevenLabs { ProgressView().controlSize(.small) }
+        }
+        if let result = elevenLabsTest { resultRow(result) }
+
+        if !elevenLabsVoices.isEmpty {
+            Picker("Voice", selection: $settings.elevenLabsVoiceID) {
+                Text("None").tag("")
+                ForEach(elevenLabsVoices) { voice in
+                    Text(voice.category.map { "\(voice.name) (\($0))" } ?? voice.name)
+                        .tag(voice.id)
+                }
+            }
+        }
+        if !elevenLabsModels.isEmpty {
+            Picker("Model", selection: $settings.elevenLabsModel) {
+                ForEach(elevenLabsModels, id: \.self) { Text($0).tag($0) }
+            }
+            note("Flash is the fastest and about half the credit cost.")
+        }
+
+        // The API rejects values outside this band.
+        Slider(value: $settings.elevenLabsSpeed, in: 0.7...1.2) {
+            Text("Speed")
+        }
+        // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns before a
+        // sound is made, and a second press during that window would cancel a request
+        // already billed and send a duplicate.
+        Button(speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview") {
+            if speaker.isSpeaking || speaker.isPreparing {
+                speaker.stop()
+            } else {
+                speaker.speak("This is how Orbit Flow will read your selection.")
+            }
+        }
+        .disabled(!hasElevenLabsKey || settings.elevenLabsVoiceID.isEmpty)
     }
 
     /// Voices for the user's language, best first. Novelty voices (Bells, Bubbles…) are
@@ -662,6 +802,77 @@ struct SettingsPanel: View {
                 }
             }
             testResult = result
+        }
+    }
+
+    private func refreshElevenLabsKeyPresence() {
+        hasElevenLabsKey = KeyStore.hasKey(account: Speaker.keyAccount)
+        hasOverrideKey = settings.readAloudProviderOverride
+            .map { KeyStore.hasKey(account: $0.rawValue) } ?? false
+    }
+
+    private func saveElevenLabsKey() {
+        let key = elevenLabsKeyField.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard KeyStore.save(key, account: Speaker.keyAccount) else {
+            elevenLabsTest = .failure("Couldn't save the key.")
+            return
+        }
+        elevenLabsKeyField = ""
+        refreshElevenLabsKeyPresence()
+        loadElevenLabs()
+    }
+
+    private func removeElevenLabsKey() {
+        KeyStore.delete(account: Speaker.keyAccount)
+        elevenLabsVoices = []
+        elevenLabsModels = []
+        elevenLabsTest = nil
+        refreshElevenLabsKeyPresence()
+    }
+
+    /// Doubles as the connection test: voices and models coming back means the key, the
+    /// host and the network all work.
+    private func loadElevenLabs() {
+        guard let key = KeyStore.read(account: Speaker.keyAccount), !key.isEmpty else {
+            elevenLabsTest = .failure("Add a key first.")
+            return
+        }
+        isTestingElevenLabs = true
+        elevenLabsTest = nil
+        Task { @MainActor in
+            defer { isTestingElevenLabs = false }
+            do {
+                let (voiceData, voiceResponse) = try await URLSession.shared
+                    .data(for: ElevenLabs.voicesRequest(key: key))
+                if let http = voiceResponse as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    elevenLabsTest = .failure(
+                        ElevenLabs.failureMessage(from: voiceData) ?? "HTTP \(http.statusCode)"
+                    )
+                    return
+                }
+                let voices = ElevenLabs.voices(from: voiceData)
+                guard !voices.isEmpty else {
+                    elevenLabsTest = .failure("No voices on this account.")
+                    return
+                }
+                elevenLabsVoices = voices
+
+                let (modelData, _) = try await URLSession.shared
+                    .data(for: ElevenLabs.modelsRequest(key: key))
+                elevenLabsModels = ElevenLabs.models(from: modelData)
+
+                if settings.elevenLabsVoiceID.isEmpty {
+                    settings.elevenLabsVoiceID = voices[0].id
+                }
+                // `TestResult.success` carries a model count and `resultRow` renders it as
+                // "Connected. N models available." — which is literally true here, so the
+                // existing row is reused rather than given a second shape. The voice count
+                // shows itself in the picker that just filled in.
+                elevenLabsTest = .success(count: elevenLabsModels.count)
+            } catch {
+                elevenLabsTest = .failure("Couldn't reach ElevenLabs.")
+            }
         }
     }
 
