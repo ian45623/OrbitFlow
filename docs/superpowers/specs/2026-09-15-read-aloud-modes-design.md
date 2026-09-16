@@ -189,6 +189,9 @@ Same 300×36 capsule as Full, same background, same shadow:
   one line, tail-truncated. On error it shows the error in `DS.Color.caution`.
 - **Right disc** — `HUDButton(kind: .discard)`, existing component.
 
+The dictation pill was reordered to match in `d88897a` — confirm left, discard right — so
+accept and dismiss sit in the same places on both pills.
+
 Hover still suspends the fade. The menu being open also suspends it — a menu that vanishes
 mid-choice is unusable.
 
