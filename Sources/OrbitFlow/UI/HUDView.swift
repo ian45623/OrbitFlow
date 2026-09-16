@@ -96,7 +96,12 @@ struct HUDView: View {
     /// summary changes page to page, and a control two windows away would never be used.
     private var readAloudPill: some View {
         HStack(spacing: DS.Space.snug) {
-            if speaker.isSpeaking || speaker.isPreparing {
+            // An offer outranks whatever is playing: a fresh highlight made while the
+            // previous passage is still being read is there to be played, and a ■ that
+            // throws it away would make the user highlight it again. A transform counts as
+            // busy, so the disc that starts it is also the disc that cancels it.
+            if controller.readAloudOffer == nil,
+               speaker.isSpeaking || speaker.isPreparing || controller.readAloudStatus != nil {
                 HUDButton(kind: .stop, size: HUDSize.full.controlSize) {
                     controller.stopReadingAloud()
                 }
@@ -133,8 +138,13 @@ struct HUDView: View {
         .padding(HUDPanel.shadowMargin)
     }
 
-    /// One slot, four things it can be, in priority order: an error you must see, what the
-    /// pill is busy doing, what it is currently saying, or — when it is idle — the menu.
+    /// One slot, three things it can be, in priority order: an error you must see, what
+    /// the pill is busy doing, or the mode menu.
+    ///
+    /// The menu stays up while the passage plays, because that is when you decide the
+    /// summary was too short — changing it mid-playback re-transforms and starts again, and
+    /// a control that hides itself in the one state where it does something is no control.
+    /// Showing the words being spoken would cost exactly that.
     @ViewBuilder
     private var readAloudCentre: some View {
         if let error = controller.readAloudError ?? speaker.failure {
@@ -155,13 +165,6 @@ struct HUDView: View {
                 .font(DS.Font.body)
                 .foregroundStyle(DS.Color.inkOnHUDMuted)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if speaker.isSpeaking, let spoken = speaker.text {
-            Text(spoken)
-                .font(DS.Font.prose)
-                .foregroundStyle(DS.Color.inkOnHUD)
-                .lineLimit(1)
-                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             modeMenu

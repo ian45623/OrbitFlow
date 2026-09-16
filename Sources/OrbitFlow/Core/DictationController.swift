@@ -84,16 +84,17 @@ final class DictationController {
 
     /// What the pill is offering to read aloud, or nil.
     ///
-    /// Cleared once ▶ has something to speak: from then on the pill shows
-    /// `Speaker.shared.text`, which is what is actually being spoken. Keeping the two apart
-    /// is what lets a new highlight be offered while the previous one is still being read.
+    /// Cleared once ▶ has something to speak, and put back by any failure so ▶ retries.
+    /// It is separate from whatever `Speaker` is doing on purpose: a highlight made while
+    /// the previous passage is still being read is a new offer, and the pill's ▶ belongs to
+    /// it rather than to the speech it would otherwise have stopped.
     private(set) var readAloudOffer: ReadAloudOffer?
 
     /// What the capsule says while a transform is working: the mode's status label, such
     /// as "Summarizing…". Nil once the transform hands off to `Speaker` — including while
     /// ElevenLabs renders, which `HUDView` shows itself from `Speaker.shared.isPreparing`
-    /// rather than through this property. Also nil when the capsule should show the mode
-    /// menu instead.
+    /// rather than through this property. Non-nil is also what makes the left disc a ■,
+    /// so a transform can be cancelled from the button that started it.
     private(set) var readAloudStatus: String?
 
     /// A failure the user must see — a rejected key, an exhausted quota, a transform that
@@ -314,6 +315,12 @@ final class DictationController {
                 self.stopReadingAloud()
                 return true
             }
+            // An error holds the pill open until it is dismissed — so Escape has to be
+            // able to dismiss it, or ✕ is the only way out.
+            if self.readAloudError != nil || Speaker.shared.failure != nil {
+                self.stopReadingAloud()
+                return true
+            }
             if self.readAloudOffer != nil { self.stopReadingAloud() }
             return false
         }
@@ -461,7 +468,18 @@ final class DictationController {
     /// Filed only here, never on highlight. Selecting text is constant — to delete it,
     /// drag it, copy an address — and History should hold what the user chose to hear.
     func readAloud() {
-        guard let offer = readAloudOffer else { return }
+        guard let offer = readAloudOffer else {
+            // A voice failure lands after the offer is gone: `Speaker` fails asynchronously,
+            // so unlike a transform failure there is nothing to put back at the time it
+            // happens. The passage is still here, so ▶ retries it rather than being a disc
+            // that is drawn and does nothing. The transform is cached, so this costs one
+            // voice call, not two.
+            if Speaker.shared.failure != nil, let source = readAloudSource {
+                Speaker.shared.clearFailure()
+                begin(source)
+            }
+            return
+        }
         // Pressed, so it must not fade out from under a copy that's still running.
         offerToken = UUID()
         readAloudError = nil
@@ -508,17 +526,21 @@ final class DictationController {
             return
         }
 
-        // Filed before the transform, so a failed summary still leaves the passage saved.
-        let run = DictationRun(
-            date: Date(),
-            engine: "Read aloud",
-            audioSeconds: 0,
-            processSeconds: 0,
-            text: text
-        )
-        RunLog.record(run)
-        readAloudRunID = run.id
-        readAloudSource = text
+        // Filed before the transform, so a failed summary still leaves the passage saved —
+        // and filed once per passage: a ▶ that retries after a failure, or after a mode
+        // switch, is the same passage and belongs in the same entry.
+        if readAloudSource != text {
+            let run = DictationRun(
+                date: Date(),
+                engine: "Read aloud",
+                audioSeconds: 0,
+                processSeconds: 0,
+                text: text
+            )
+            RunLog.record(run)
+            readAloudRunID = run.id
+            readAloudSource = text
+        }
 
         transformAndSpeak(text, mode: mode)
     }
@@ -543,8 +565,7 @@ final class DictationController {
         if mode == .custom,
            Settings.shared.readingModeCustomInstruction
                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            readAloudStatus = nil
-            readAloudError = "Add an instruction for your custom mode in Settings."
+            failed("Add an instruction for your custom mode in Settings.", source: source)
             return
         }
 
@@ -561,8 +582,7 @@ final class DictationController {
         case .success(let value):
             chosen = value
         case .failure(let unavailable):
-            readAloudStatus = nil
-            readAloudError = unavailable.summary
+            failed(unavailable.summary, source: source)
             return
         }
 
@@ -603,8 +623,7 @@ final class DictationController {
 
                 let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
-                    readAloudStatus = nil
-                    readAloudError = "That came back empty — try another mode."
+                    failed("That came back empty — try another mode.", source: source)
                     return
                 }
 
@@ -629,14 +648,26 @@ final class DictationController {
                 Speaker.shared.speak(trimmed)
             } catch {
                 guard transformToken == token else { return }
-                readAloudStatus = nil
                 // Never fall back to reading the original: you asked for a summary, and
                 // being handed the whole page instead is the one outcome this feature
                 // exists to prevent.
-                readAloudError = (error as? RewriteFailure)?.summary
-                    ?? OnDeviceRewriter.describe(error)
+                failed(
+                    (error as? RewriteFailure)?.summary ?? OnDeviceRewriter.describe(error),
+                    source: source
+                )
             }
         }
+    }
+
+    /// Shows `message` and leaves the passage on offer, so ▶ tries it again — with another
+    /// mode picked from the menu beside it, or the same one once a key is in place. The
+    /// pill is the whole interface here; a failure that removes its only two controls is a
+    /// dead end you can't even retry your way out of. The run stays filed under
+    /// `readAloudRunID`, so the retry appends to that entry instead of making a second one.
+    private func failed(_ message: String, source: String) {
+        readAloudStatus = nil
+        readAloudError = message
+        readAloudOffer = .text(source)
     }
 
     /// Which provider and model read aloud bills — the shared pair unless the user split
@@ -714,7 +745,6 @@ final class DictationController {
                 reading = await Task.detached(priority: .userInitiated) {
                     SelectedText.read(pid: pid)
                 }.value
-                readAloudTrace("  (retry)")
             }
             guard mouseUpToken == token else { return }
 
@@ -727,14 +757,11 @@ final class DictationController {
             )
             switch decision {
             case .none:
-                readAloudTrace("  gesture=\(isGesture) decision=none")
                 if reading == .empty || reading == .unknown { lastOfferedSelection = nil }
             case .offerText(let text):
-                readAloudTrace("  gesture=\(isGesture) decision=offerText")
                 lastOfferedSelection = text
                 offerReadAloud(.text(text))
             case .offerCopy:
-                readAloudTrace("  gesture=\(isGesture) decision=offerCopy")
                 lastOfferedSelection = nil
                 offerReadAloud(.copy)
             }
@@ -752,6 +779,10 @@ final class DictationController {
         readAloudRunID = nil
         readAloudSource = nil
         readAloudError = nil
+        // The other half of the same error: `Speaker`'s failure outranks the status in the
+        // capsule and is only cleared by `speak` or `stop`, neither of which runs here —
+        // `offerReadAloud` deliberately leaves the previous passage playing.
+        Speaker.shared.clearFailure()
         transformToken = UUID()
         readAloudStatus = nil
         // A new offer appears where the last one was; a pointer left resting there from
@@ -773,12 +804,12 @@ final class DictationController {
     /// The pointer entered or left the read-aloud button. Leaving gives an offer a fresh
     /// five seconds rather than whatever was left of the first, which may already be gone.
     func setHoveringReadAloud(_ hovering: Bool) {
-        readAloudTrace("hover=\(hovering)")
         isHoveringReadAloud = hovering
-        // A confirmed long-selection question must stay up until answered — it already
-        // skipped its own fade in `begin(_:)`, and re-arming one here on mouse-out would
-        // silently dismiss the question the comment there says must not happen.
-        if !hovering, readAloudOffer != nil, !isCopyingSelection, !lengthConfirmed {
+        // Anything the user is owed an answer to — the long-selection question, a failure
+        // with ▶ still there to retry — stays up until it is answered. Both set
+        // `readAloudError`, both skipped their own fade when they put the offer back, and
+        // re-arming one here on mouse-out would dismiss them behind the user's back.
+        if !hovering, readAloudOffer != nil, !isCopyingSelection, readAloudError == nil {
             scheduleOfferFade()
         }
     }

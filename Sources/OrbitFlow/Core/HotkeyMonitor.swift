@@ -91,7 +91,6 @@ final class HotkeyMonitor {
             userInfo: refcon
         ) else {
             Log.hotkey.error("tapCreate failed — Accessibility permission missing?")
-            readAloudTrace("tapCreate FAILED")
             return false
         }
 
@@ -102,7 +101,6 @@ final class HotkeyMonitor {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         Log.hotkey.info("listening for \(ShortcutKeys.displaySummary(self.keys))")
-        readAloudTrace("tap started mouseUp=\(Settings.shared.readAloudEnabled)")
         return true
     }
 

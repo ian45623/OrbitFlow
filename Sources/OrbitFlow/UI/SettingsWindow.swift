@@ -33,6 +33,9 @@ struct SettingsPanel: View {
     /// A key for the overridden read-aloud provider, which may be one the rewrite tier
     /// isn't using. Nil when no override is set.
     @State private var hasOverrideKey = false
+    /// Typed into and cleared on save, like `keyDraft` — the store is never read back into
+    /// a field.
+    @State private var overrideKeyDraft = ""
 
     /// Shared, so a download started from the menu bar — or by a first dictation —
     /// shows up here too.
@@ -417,7 +420,7 @@ struct SettingsPanel: View {
                 + "macOS — web pages in Chrome, Word, Cursor and VS Code — ▶ copies the "
                 + "selection to read it, then puts your clipboard back.")
 
-            Divider().padding(.vertical, DS.Space.tight)
+            Hairline()
 
             Picker("Reading mode", selection: $settings.readingMode) {
                 ForEach(ReadingMode.allCases, id: \.self) { mode in
@@ -464,7 +467,17 @@ struct SettingsPanel: View {
                     if hasOverrideKey {
                         note("A key is saved for \(override.displayName).")
                     } else {
-                        note("No key saved for \(override.displayName) — add one in the AI rewrite section.")
+                        // Stored under the provider, not the feature, so a key entered
+                        // here is the same key AI rewrite would use if you pointed it at
+                        // this provider too. Without this field the only way to store one
+                        // was to repoint rewrite at it, save, and repoint back.
+                        note("No key saved for \(override.displayName).")
+                        HStack {
+                            SecureField("Paste your \(override.displayName) key", text: $overrideKeyDraft)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Save") { saveOverrideKey(override) }
+                                .disabled(overrideKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
                         Link("Get a \(override.displayName) key ↗", destination: override.keyURL)
                             .font(DS.Font.caption)
                     }
@@ -473,7 +486,7 @@ struct SettingsPanel: View {
                 }
             }
 
-            Divider().padding(.vertical, DS.Space.tight)
+            Hairline()
 
             Picker("Voice", selection: $settings.readAloudEngine) {
                 ForEach(VoiceEngine.allCases, id: \.self) { engine in
@@ -569,21 +582,30 @@ struct SettingsPanel: View {
         }
         if let result = elevenLabsTest { resultRow(result) }
 
-        if !elevenLabsVoices.isEmpty {
+        // Both pickers show what is saved before Test has been pressed — the selection
+        // persists, so a picker that hides itself until the list is fetched reads as the
+        // setting having been lost. The bare id is the only name we have until then.
+        if !elevenLabsVoices.isEmpty || !settings.elevenLabsVoiceID.isEmpty {
             Picker("Voice", selection: $settings.elevenLabsVoiceID) {
                 Text("None").tag("")
+                if !settings.elevenLabsVoiceID.isEmpty,
+                   !elevenLabsVoices.contains(where: { $0.id == settings.elevenLabsVoiceID }) {
+                    Text(settings.elevenLabsVoiceID).tag(settings.elevenLabsVoiceID)
+                }
                 ForEach(elevenLabsVoices) { voice in
                     Text(voice.category.map { "\(voice.name) (\($0))" } ?? voice.name)
                         .tag(voice.id)
                 }
             }
         }
-        if !elevenLabsModels.isEmpty {
-            Picker("Model", selection: $settings.elevenLabsModel) {
-                ForEach(elevenLabsModels, id: \.self) { Text($0).tag($0) }
+        Picker("Model", selection: $settings.elevenLabsModel) {
+            if !settings.elevenLabsModel.isEmpty,
+               !elevenLabsModels.contains(settings.elevenLabsModel) {
+                Text(settings.elevenLabsModel).tag(settings.elevenLabsModel)
             }
-            note("Flash is the fastest and about half the credit cost.")
+            ForEach(elevenLabsModels, id: \.self) { Text($0).tag($0) }
         }
+        note("Flash is the fastest and about half the credit cost.")
 
         // The API rejects values outside this band.
         Slider(value: $settings.elevenLabsSpeed, in: 0.7...1.2) {
@@ -818,6 +840,20 @@ struct SettingsPanel: View {
             .map { KeyStore.hasKey(account: $0.rawValue) } ?? false
     }
 
+    /// Stores a key for the provider read aloud is overridden to. Same store and same
+    /// account name as `saveKey()` — this is only a second way in to the same drawer.
+    private func saveOverrideKey(_ provider: AIProvider) {
+        let key = overrideKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Leave the draft alone if the store refused it: clearing it would lose what was
+        // typed while the note below still said no key was saved.
+        guard !key.isEmpty, KeyStore.save(key, account: provider.rawValue) else { return }
+        overrideKeyDraft = ""
+        // Both flags, as saveKey() does: the override may point at the provider AI rewrite
+        // is using, and that section's row must not still say the key is missing.
+        refreshKeyPresence()
+        refreshElevenLabsKeyPresence()
+    }
+
     private func saveElevenLabsKey() {
         let key = elevenLabsKeyField.trimmingCharacters(in: .whitespacesAndNewlines)
         guard KeyStore.save(key, account: Speaker.keyAccount) else {
@@ -849,7 +885,7 @@ struct SettingsPanel: View {
         Task { @MainActor in
             defer { isTestingElevenLabs = false }
             do {
-                let (voiceData, voiceResponse) = try await URLSession.shared
+                let (voiceData, voiceResponse) = try await Speaker.session
                     .data(for: ElevenLabs.voicesRequest(key: key))
                 if let http = voiceResponse as? HTTPURLResponse,
                    !(200..<300).contains(http.statusCode) {
@@ -868,7 +904,7 @@ struct SettingsPanel: View {
                     settings.elevenLabsVoiceID = voices[0].id
                 }
 
-                let (modelData, modelResponse) = try await URLSession.shared
+                let (modelData, modelResponse) = try await Speaker.session
                     .data(for: ElevenLabs.modelsRequest(key: key))
                 if let http = modelResponse as? HTTPURLResponse,
                    !(200..<300).contains(http.statusCode) {

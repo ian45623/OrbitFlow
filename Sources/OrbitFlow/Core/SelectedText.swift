@@ -2,14 +2,6 @@ import AppKit
 import ApplicationServices
 import OrbitFlowHotkey
 
-// DEBUG TRACE — temporary, remove before commit. Codes and lengths only, never text.
-nonisolated func readAloudTrace(_ line: String) {
-    let url = URL(fileURLWithPath: "/tmp/orbitflow-readaloud-trace.log")
-    let data = Data("\(Date().formatted(.iso8601)) \(line)\n".utf8)
-    if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
-    else { try? data.write(to: url) }
-}
-
 /// Finds out what is highlighted in the frontmost app.
 ///
 /// Accessibility first, on every mouse-up while read aloud is on. It is cheap and silent,
@@ -48,7 +40,6 @@ enum SelectedText {
         let focusedError = AXUIElementCopyAttributeValue(
             appElement, kAXFocusedUIElementAttribute as CFString, &focused
         )
-        readAloudTrace("read pid=\(pid) focusedErr=\(focusedError.rawValue)")
         guard focusedError == .success, let focused else {
             return classifySelection(focusedError: focusedError.rawValue, selectedError: nil, value: nil)
         }
@@ -68,9 +59,6 @@ enum SelectedText {
         let selectedError = AXUIElementCopyAttributeValue(
             element, kAXSelectedTextAttribute as CFString, &value
         )
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        readAloudTrace("  role=\(role as? String ?? "nil") selErr=\(selectedError.rawValue) len=\((value as? String)?.count ?? -1)")
         return classifySelection(
             focusedError: 0, selectedError: selectedError.rawValue, value: value as? String
         )
@@ -93,10 +81,7 @@ enum SelectedText {
         for _ in 0..<10 where pasteboard.changeCount == before {
             try? await Task.sleep(for: .milliseconds(50))
         }
-        guard pasteboard.changeCount != before else {
-            readAloudTrace("copy: clipboard unchanged")
-            return nil
-        }
+        guard pasteboard.changeCount != before else { return nil }
 
         let text = pasteboard.string(forType: .string)
         // Put back exactly what was there — including nothing, which `restore` alone would
@@ -106,7 +91,6 @@ enum SelectedText {
         } else {
             TextInjector.restore(saved, to: pasteboard)
         }
-        readAloudTrace("copy: len=\(text?.count ?? -1)")
 
         guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
         else { return nil }

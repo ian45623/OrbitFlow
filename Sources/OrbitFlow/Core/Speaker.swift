@@ -25,8 +25,6 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// True while ElevenLabs renders the audio — after ▶, before the first word. The
     /// system backend is never in this state; it starts talking immediately.
     private(set) var isPreparing = false
-    /// What is being spoken, so the pill can show it next to the ■.
-    private(set) var text: String?
     /// Why the last attempt produced no sound. Shown in the capsule; cleared by the next
     /// `speak` or `stop`.
     private(set) var failure: String?
@@ -35,6 +33,14 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var fetch: Task<Void, Never>?
 
+    /// The last MP3 ElevenLabs rendered, and the voice, model, speed and text that produced
+    /// it. Cycling modes and coming back to one you already heard is the case this exists
+    /// for: the transform is already cached, and re-rendering the identical audio would be
+    /// a second charge for a file we are still holding. One entry — that covers "switch
+    /// mode and switch back" and needs no eviction policy. The settings are part of the key
+    /// rather than an invalidation step, so picking a new voice cannot replay the old one.
+    @ObservationIgnored private var rendered: (key: String, data: Data)?
+
     private override init() {
         super.init()
         synthesizer.delegate = self
@@ -42,7 +48,6 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     func speak(_ text: String) {
         stop()
-        self.text = text
 
         switch Settings.shared.readAloudEngine {
         case .system:
@@ -59,12 +64,20 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         }
     }
 
+    /// Drops a failure left over from the last attempt, without touching speech in flight.
+    ///
+    /// `stop()` would do this too, but it also silences whatever is playing — and a new
+    /// highlight is deliberately offered while the previous passage is still being read.
+    /// Without this, the pill for the new selection would open showing the old error.
+    func clearFailure() {
+        failure = nil
+    }
+
     func stop() {
         fetch?.cancel()
         fetch = nil
         player?.stop()
         player = nil
-        text = nil
         failure = nil
         isPreparing = false
         isSpeaking = false
@@ -79,13 +92,18 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         guard !voiceID.isEmpty else {
             return fail("Pick an ElevenLabs voice in Settings.")
         }
-        guard let key = KeyStore.read(account: Self.keyAccount), !key.isEmpty else {
+        guard let apiKey = KeyStore.read(account: Self.keyAccount), !apiKey.isEmpty else {
             return fail("Add your ElevenLabs key in Settings.")
+        }
+
+        let key = "\(voiceID)\u{1}\(settings.elevenLabsModel)\u{1}\(settings.elevenLabsSpeed)\u{1}\(text)"
+        if let rendered, rendered.key == key {
+            return playRendered(rendered.data)
         }
 
         let request = ElevenLabs.speechRequest(
             voiceID: voiceID,
-            key: key,
+            key: apiKey,
             model: settings.elevenLabsModel,
             text: text,
             speed: settings.elevenLabsSpeed
@@ -102,15 +120,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                     return fail(Self.message(for: http.statusCode, body: data))
                 }
 
-                let player = try AVAudioPlayer(data: data)
-                player.delegate = self
-                player.enableRate = false
-                guard player.play() else {
-                    return fail("ElevenLabs returned audio we couldn't play.")
-                }
-                self.player = player
-                isPreparing = false
-                isSpeaking = true
+                rendered = (key, data)
+                playRendered(data)
             } catch is CancellationError {
                 return
             } catch let error as URLError where error.code == .cancelled {
@@ -120,11 +131,27 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
             } catch is URLError {
                 fail("Couldn't reach ElevenLabs.")
             } catch {
-                // AVAudioPlayer(data:) throws here when the body isn't decodable audio —
-                // which is what an HTML error page from a proxy looks like.
-                fail("ElevenLabs returned audio we couldn't play.")
+                fail("Couldn't reach ElevenLabs.")
             }
         }
+    }
+
+    /// Plays audio ElevenLabs has already sent us, whether that was a moment ago or the
+    /// last time this text was read.
+    private func playRendered(_ data: Data) {
+        guard let player = try? AVAudioPlayer(data: data) else {
+            // `AVAudioPlayer(data:)` throws when the body isn't decodable audio — which is
+            // what an HTML error page from a proxy looks like.
+            return fail("ElevenLabs returned audio we couldn't play.")
+        }
+        player.delegate = self
+        player.enableRate = false
+        guard player.play() else {
+            return fail("ElevenLabs returned audio we couldn't play.")
+        }
+        self.player = player
+        isPreparing = false
+        isSpeaking = true
     }
 
     /// The account name under which the ElevenLabs key is stored, alongside the rewrite
@@ -133,7 +160,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     static let keyAccount = "elevenlabs"
 
     /// 30 s: rendering a summary is a few seconds, and nothing is waiting to be typed.
-    @ObservationIgnored private static let session: URLSession = {
+    /// Ephemeral, so no cache or cookie store follows a keyed API call around. Settings'
+    /// Test button borrows it rather than reaching for `URLSession.shared`.
+    @ObservationIgnored static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
         return URLSession(configuration: configuration)
@@ -154,7 +183,6 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
     private func fail(_ message: String) {
         player = nil
-        text = nil
         isPreparing = false
         isSpeaking = false
         failure = message
@@ -183,10 +211,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     private func settle() {
         // An ElevenLabs `speak()` calls `stop()` first, which cancels a queued system
         // utterance and fires `didCancel` — but queues no utterance of its own, so without
-        // the extra checks this would race the ElevenLabs path and wipe the `text` it just
-        // set before a sound is ever made.
+        // the extra checks this would race the ElevenLabs path and mark its passage
+        // finished before a sound is ever made.
         guard !synthesizer.isSpeaking, !isPreparing, player == nil else { return }
-        text = nil
         isSpeaking = false
     }
 
@@ -207,7 +234,6 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                   !current.isPlaying
             else { return }
             self.player = nil
-            self.text = nil
             self.isSpeaking = false
         }
     }
