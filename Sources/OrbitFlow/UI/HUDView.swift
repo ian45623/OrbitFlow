@@ -137,7 +137,7 @@ struct HUDView: View {
     /// pill is busy doing, what it is currently saying, or — when it is idle — the menu.
     @ViewBuilder
     private var readAloudCentre: some View {
-        if let error = controller.readAloudError {
+        if let error = controller.readAloudError ?? speaker.failure {
             Text(error)
                 .font(DS.Font.body)
                 .foregroundStyle(DS.Color.caution)
@@ -146,6 +146,12 @@ struct HUDView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if let status = controller.readAloudStatus {
             Text(status)
+                .font(DS.Font.body)
+                .foregroundStyle(DS.Color.inkOnHUDMuted)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if speaker.isPreparing {
+            Text("Generating voice…")
                 .font(DS.Font.body)
                 .foregroundStyle(DS.Color.inkOnHUDMuted)
                 .lineLimit(1)

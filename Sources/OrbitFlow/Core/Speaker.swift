@@ -1,28 +1,39 @@
 import AVFoundation
+import Foundation
 import Observation
+import OrbitFlowAIRewrite
 
-/// Reads text aloud with a system voice.
+/// Reads text aloud, either with a system voice or an ElevenLabs one.
 ///
 /// One shared instance, because there is one speaker on the Mac: the pill, the History
 /// detail page and the Settings preview all speak through this, so starting any of them
 /// stops whatever else was talking, and a single ■ anywhere stops it all.
 ///
-/// Voice and speed are read from `Settings` at the moment `speak` is called, so a change in
-/// Settings applies to the next thing read without anything having to observe it.
+/// Engine, voice and speed are read from `Settings` at the moment `speak` is called, so a
+/// change in Settings applies to the next thing read without anything having to observe it.
+///
+/// The two backends never substitute for each other. A failed ElevenLabs call surfaces as
+/// an error rather than quietly becoming a system voice: switching voice, speed and
+/// character mid-passage with no explanation is more confusing than being told the key is
+/// wrong.
 @MainActor
 @Observable
-final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
+final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     static let shared = Speaker()
 
     private(set) var isSpeaking = false
-    /// True while a networked voice renders the audio — after ▶, before the first word.
-    /// Nothing sets this yet; the ElevenLabs backend that does lands in a later task. The
-    /// capsule already has to render the state, which is why the property is here first.
+    /// True while ElevenLabs renders the audio — after ▶, before the first word. The
+    /// system backend is never in this state; it starts talking immediately.
     private(set) var isPreparing = false
     /// What is being spoken, so the pill can show it next to the ■.
     private(set) var text: String?
+    /// Why the last attempt produced no sound. Shown in the capsule; cleared by the next
+    /// `speak` or `stop`.
+    private(set) var failure: String?
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var fetch: Task<Void, Never>?
 
     private override init() {
         super.init()
@@ -30,22 +41,123 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func speak(_ text: String) {
-        synthesizer.stopSpeaking(at: .immediate)
-
-        let utterance = AVSpeechUtterance(string: text)
-        let settings = Settings.shared
-        utterance.voice = settings.readAloudVoice.flatMap { AVSpeechSynthesisVoice(identifier: $0) }
-        utterance.rate = settings.readAloudRate
-
+        stop()
         self.text = text
-        isSpeaking = true
-        synthesizer.speak(utterance)
+
+        switch Settings.shared.readAloudEngine {
+        case .system:
+            let utterance = AVSpeechUtterance(string: text)
+            let settings = Settings.shared
+            utterance.voice = settings.readAloudVoice
+                .flatMap { AVSpeechSynthesisVoice(identifier: $0) }
+            utterance.rate = settings.readAloudRate
+            isSpeaking = true
+            synthesizer.speak(utterance)
+
+        case .elevenLabs:
+            speakWithElevenLabs(text)
+        }
     }
 
     func stop() {
+        fetch?.cancel()
+        fetch = nil
+        player?.stop()
+        player = nil
         text = nil
+        failure = nil
+        isPreparing = false
         isSpeaking = false
         synthesizer.stopSpeaking(at: .immediate)
+    }
+
+    // MARK: - ElevenLabs
+
+    private func speakWithElevenLabs(_ text: String) {
+        let settings = Settings.shared
+        let voiceID = settings.elevenLabsVoiceID
+        guard !voiceID.isEmpty else {
+            return fail("Pick an ElevenLabs voice in Settings.")
+        }
+        guard let key = KeyStore.read(account: Self.keyAccount), !key.isEmpty else {
+            return fail("Add your ElevenLabs key in Settings.")
+        }
+
+        let request = ElevenLabs.speechRequest(
+            voiceID: voiceID,
+            key: key,
+            model: settings.elevenLabsModel,
+            text: text,
+            speed: settings.elevenLabsSpeed
+        )
+
+        isPreparing = true
+        fetch = Task { @MainActor in
+            do {
+                let (data, response) = try await Self.session.data(for: request)
+                guard !Task.isCancelled else { return }
+
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    return fail(Self.message(for: http.statusCode, body: data))
+                }
+
+                let player = try AVAudioPlayer(data: data)
+                player.delegate = self
+                player.enableRate = false
+                guard player.play() else {
+                    return fail("ElevenLabs returned audio we couldn't play.")
+                }
+                self.player = player
+                isPreparing = false
+                isSpeaking = true
+            } catch is CancellationError {
+                return
+            } catch let error as URLError where error.code == .cancelled {
+                return
+            } catch let error as URLError where error.code == .timedOut {
+                fail("ElevenLabs timed out.")
+            } catch is URLError {
+                fail("Couldn't reach ElevenLabs.")
+            } catch {
+                // AVAudioPlayer(data:) throws here when the body isn't decodable audio —
+                // which is what an HTML error page from a proxy looks like.
+                fail("ElevenLabs returned audio we couldn't play.")
+            }
+        }
+    }
+
+    /// The account name under which the ElevenLabs key is stored, alongside the rewrite
+    /// providers' keys. Not an `AIProvider` case — that enum is the rewrite tier's list of
+    /// chat providers, and ElevenLabs does not belong in a model picker.
+    static let keyAccount = "elevenlabs"
+
+    /// 30 s: rendering a summary is a few seconds, and nothing is waiting to be typed.
+    @ObservationIgnored private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        return URLSession(configuration: configuration)
+    }()
+
+    /// A bad key and an exhausted quota are both 401; only the body tells them apart, so
+    /// the provider's own message wins whenever it sent one.
+    private static func message(for status: Int, body: Data) -> String {
+        if let detail = ElevenLabs.failureMessage(from: body) {
+            return "ElevenLabs: \(detail)"
+        }
+        switch status {
+        case 401, 403: return "ElevenLabs rejected the key — check it in Settings."
+        case 429: return "ElevenLabs is rate-limiting — try again in a moment."
+        default: return "ElevenLabs: HTTP \(status)"
+        }
+    }
+
+    private func fail(_ message: String) {
+        player = nil
+        text = nil
+        isPreparing = false
+        isSpeaking = false
+        failure = message
     }
 
     // MARK: - AVSpeechSynthesizerDelegate
@@ -72,5 +184,22 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         guard !synthesizer.isSpeaking else { return }
         text = nil
         isSpeaking = false
+    }
+
+    // MARK: - AVAudioPlayerDelegate
+
+    nonisolated func audioPlayerDidFinishPlaying(
+        _ player: AVAudioPlayer, successfully flag: Bool
+    ) {
+        // `AVAudioPlayer` isn't `Sendable`, so only its identity — not the instance
+        // itself — crosses into the MainActor closure below.
+        let finished = ObjectIdentifier(player)
+        Task { @MainActor in
+            // A newer passage may already be playing through a different player.
+            guard let current = self.player, ObjectIdentifier(current) == finished else { return }
+            self.player = nil
+            self.text = nil
+            self.isSpeaking = false
+        }
     }
 }

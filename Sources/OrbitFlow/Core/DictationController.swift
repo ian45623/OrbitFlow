@@ -113,6 +113,8 @@ final class DictationController {
             || readAloudStatus != nil
             || readAloudError != nil
             || Speaker.shared.isSpeaking
+            || Speaker.shared.isPreparing
+            || Speaker.shared.failure != nil
     }
 
     /// Whether the pill needs full width right now regardless of the Compact setting.

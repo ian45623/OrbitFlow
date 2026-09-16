@@ -189,6 +189,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = controller.readAloudStatus
             _ = controller.readAloudError
             _ = Speaker.shared.isSpeaking
+            _ = Speaker.shared.isPreparing
+            _ = Speaker.shared.failure
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
