@@ -67,12 +67,27 @@ final class DictationController {
     /// HUD is already a non-activating panel, so it is the one surface that qualifies.
     private(set) var notice: String?
 
-    /// Highlighted text the pill is offering to read aloud, or nil.
+    /// What the pill's ▶ would read.
+    enum ReadAloudOffer: Equatable {
+        /// Text Accessibility already handed over.
+        case text(String)
+        /// A selection in an app that won't share it through Accessibility; ▶ copies it.
+        case copy
+
+        var label: String {
+            switch self {
+            case .text(let text): text
+            case .copy: "Read selection"
+            }
+        }
+    }
+
+    /// What the pill is offering to read aloud, or nil.
     ///
-    /// Cleared the moment ▶ is pressed: from then on the pill shows `Speaker.shared.text`,
-    /// which is what is actually being spoken. Keeping the two apart is what lets a new
-    /// highlight be offered while the previous one is still being read.
-    private(set) var readAloudOffer: String?
+    /// Cleared once ▶ has something to speak: from then on the pill shows
+    /// `Speaker.shared.text`, which is what is actually being spoken. Keeping the two apart
+    /// is what lets a new highlight be offered while the previous one is still being read.
+    private(set) var readAloudOffer: ReadAloudOffer?
 
     /// Whether the pill is in read-aloud mode: something offered, or something being read —
     /// from the pill, the History page, or the Settings preview.
@@ -89,13 +104,23 @@ final class DictationController {
     var needsFullHUD: Bool {
         if notice != nil { return true }
         if case .idle = state, isRewriting { return true }
-        // An offer is only useful if you can see what it's offering, and Compact has no
-        // room for a word of it. Ignored while a dictation is active: the pill belongs to
-        // the recording then (`HUDView.isReadingAloud` already hides the read-aloud
-        // controls), so speech started elsewhere must not resize a Compact pill out from
-        // under it.
-        if isReadAloudShowing, !state.isActive { return true }
         return false
+    }
+
+    /// Whether the pill is the round read-aloud button rather than the dictation capsule.
+    ///
+    /// Anything the pill already had a job for comes first. `HUDView` (what's drawn) and
+    /// `HUDPanel` (the window's size) both read this, so they can't disagree.
+    ///
+    /// Stored rather than computed, and refreshed only while the pill has something to show
+    /// (see `refreshPillShape`). Pressing ■ stops the speech and starts a 160ms fade-out, and
+    /// a live computation would flip to the dictation capsule for exactly that fade —
+    /// flashing a pill the user isn't dictating into on their way out of reading.
+    private(set) var showsReadAloudButton = false
+
+    /// Called just before the pill is shown, by whoever decides it should be on screen.
+    func refreshPillShape() {
+        showsReadAloudButton = !state.isActive && notice == nil && !isRewriting && isReadAloudShowing
     }
 
     private let hotkey = HotkeyMonitor()
@@ -123,7 +148,7 @@ final class DictationController {
         return CloudFormatter(
             provider: settings.aiProvider,
             model: settings.aiModel,
-            key: Keychain.read(account: settings.aiProvider.rawValue) ?? "",
+            key: KeyStore.read(account: settings.aiProvider.rawValue) ?? "",
             mode: settings.rewriteMode
         )
     }
@@ -175,6 +200,13 @@ final class DictationController {
     /// selection that a later click has already replaced.
     private var mouseUpToken = UUID()
 
+    /// A ▶ on a copy offer is waiting for the app to fill the clipboard. A second press in
+    /// that half-second would post a second ⌘C over the first one's restore.
+    private var isCopyingSelection = false
+
+    /// The pointer is over the read-aloud button, so an offer must not fade from under it.
+    private var isHoveringReadAloud = false
+
     private var holdStarted: Date?
     private var releasedAt: Date?
     private var engineName = ""
@@ -200,7 +232,7 @@ final class DictationController {
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
         hotkey.onRelease = { [weak self] in self?.hotkeyReleased() }
         hotkey.onChord = { [weak self] in self?.hotkeyChorded() }
-        hotkey.onMouseUp = { [weak self] in self?.mouseReleased() }
+        hotkey.onMouseUp = { [weak self] isGesture in self?.mouseReleased(isGesture: isGesture) }
         // Escape does what the pill's ✕ does, but the swallow decision needs the answer up
         // front: Escape must reach the app underneath unless it cancelled a recording or
         // silenced speech. An offer on its own is cleared and the key still goes through —
@@ -349,14 +381,39 @@ final class DictationController {
 
     // MARK: - Read aloud
 
-    /// ▶ on the pill: file the offered text in History, then read it.
+    /// ▶ on the pill: get the text if it isn't in hand yet, file it in History, read it.
     ///
     /// Filed only here, never on highlight. Selecting text is constant — to delete it, drag
     /// it, copy an address — and History should hold what the user chose to hear.
     func readAloud() {
-        guard let text = readAloudOffer else { return }
+        guard let offer = readAloudOffer else { return }
+        // Pressed, so it must not fade out from under a copy that's still running.
         offerToken = UUID()
-        readAloudOffer = nil
+
+        switch offer {
+        case .text(let text):
+            readAloudOffer = nil
+            recordAndSpeak(text)
+        case .copy:
+            guard !isCopyingSelection else { return }
+            isCopyingSelection = true
+            Task { @MainActor in
+                let text = await SelectedText.copy()
+                isCopyingSelection = false
+                // ✕, Escape, the talk key or a notice may have taken the pill while the app
+                // was copying; any of them means the user has moved on.
+                guard readAloudOffer == .copy else { return }
+                readAloudOffer = nil
+                guard let text else {
+                    flash("Couldn't copy that selection.")
+                    return
+                }
+                recordAndSpeak(text)
+            }
+        }
+    }
+
+    private func recordAndSpeak(_ text: String) {
         RunLog.record(
             DictationRun(
                 date: Date(),
@@ -376,7 +433,7 @@ final class DictationController {
         Speaker.shared.stop()
     }
 
-    private func mouseReleased() {
+    private func mouseReleased(isGesture: Bool) {
         guard Settings.shared.readAloudEnabled else { return }
         mouseUpToken = UUID()
         let token = mouseUpToken
@@ -387,37 +444,72 @@ final class DictationController {
             // A click that came in during the wait has its own read coming.
             guard mouseUpToken == token else { return }
 
-            let pid = SelectedText.frontmostAppPID()
-            let read = await Task.detached(priority: .userInitiated) {
-                pid.flatMap { SelectedText.read(pid: $0) }
+            guard let pid = SelectedText.frontmostAppPID() else { return }
+            var reading = await Task.detached(priority: .userInitiated) {
+                SelectedText.read(pid: pid)
             }.value
+
+            // Chrome updates its Accessibility selection a beat after the mouse-up, so a
+            // selection gesture that came back with nothing gets one more look. Plain clicks
+            // don't: they can't have selected anything, and they are most clicks.
+            if isGesture, reading == .empty || reading == .unknown {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard mouseUpToken == token else { return }
+                reading = await Task.detached(priority: .userInitiated) {
+                    SelectedText.read(pid: pid)
+                }.value
+                readAloudTrace("  (retry)")
+            }
             guard mouseUpToken == token else { return }
 
-            guard let text = read else {
-                lastOfferedSelection = nil
-                return
-            }
-            guard shouldOfferReadAloud(
-                text: text,
+            let decision = readAloudDecision(
+                reading: reading,
+                isGesture: isGesture,
                 lastOffered: lastOfferedSelection,
                 enabled: Settings.shared.readAloudEnabled,
                 isBusy: state.isActive || isRewriting || notice != nil
-            ) else { return }
-
-            offerReadAloud(text)
+            )
+            switch decision {
+            case .none:
+                readAloudTrace("  gesture=\(isGesture) decision=none")
+                if reading == .empty || reading == .unknown { lastOfferedSelection = nil }
+            case .offerText(let text):
+                readAloudTrace("  gesture=\(isGesture) decision=offerText")
+                lastOfferedSelection = text
+                offerReadAloud(.text(text))
+            case .offerCopy:
+                readAloudTrace("  gesture=\(isGesture) decision=offerCopy")
+                lastOfferedSelection = nil
+                offerReadAloud(.copy)
+            }
         }
     }
 
-    /// Shows ▶ for `text`, fading after four seconds if it isn't pressed.
-    private func offerReadAloud(_ text: String) {
-        lastOfferedSelection = text
-        readAloudOffer = text
+    /// Shows ▶ for `offer`, fading after five seconds if it isn't pressed.
+    private func offerReadAloud(_ offer: ReadAloudOffer) {
+        readAloudOffer = offer
+        // A new offer appears where the last one was; a pointer left resting there from
+        // before shouldn't pin it open, and SwiftUI won't report the exit of a view it
+        // already replaced.
+        isHoveringReadAloud = false
+        scheduleOfferFade()
+    }
+
+    private func scheduleOfferFade() {
         offerToken = UUID()
         let token = offerToken
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
-            if offerToken == token { readAloudOffer = nil }
+            try? await Task.sleep(for: .seconds(5))
+            if offerToken == token, !isHoveringReadAloud { readAloudOffer = nil }
         }
+    }
+
+    /// The pointer entered or left the read-aloud button. Leaving gives an offer a fresh
+    /// five seconds rather than whatever was left of the first, which may already be gone.
+    func setHoveringReadAloud(_ hovering: Bool) {
+        readAloudTrace("hover=\(hovering)")
+        isHoveringReadAloud = hovering
+        if !hovering, readAloudOffer != nil, !isCopyingSelection { scheduleOfferFade() }
     }
 
     // MARK: - Dictation

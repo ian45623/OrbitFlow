@@ -72,19 +72,39 @@ final class HUDPanel: NSPanel {
         }
         let visible = screen.visibleFrame
         let size = frame.size
-        // Offset by the margin so the *capsule* sits 96pt up, not the invisible panel around
-        // it — otherwise changing the pill size would appear to move the pill.
+        // `visibleFrame` already stops above the Dock, so this is the gap between the two:
+        // close enough to read as part of the Dock's furniture rather than floating in the
+        // middle of whatever you're working in, far enough not to touch it or catch its
+        // magnification. Offset by the margin so the *capsule* sits at that gap, not the
+        // invisible panel around it — otherwise changing the pill size would move the pill.
         setFrameOrigin(
             NSPoint(
                 x: visible.midX - size.width / 2,
-                y: visible.minY + 96 - Self.shadowMargin
+                y: visible.minY + Self.dockGap - Self.shadowMargin
             )
         )
     }
 
+    /// Space left between the Dock (or the screen's bottom edge) and the pill.
+    ///
+    /// Enough to clear the Dock's own tooltips: hovering an icon raises its name into the
+    /// space just above the Dock, and at a smaller gap that label shows through from behind
+    /// the pill. Everything else wants this as small as possible — the pill belongs with the
+    /// Dock, not in the middle of what you're reading.
+    static let dockGap: CGFloat = 40
+
+    /// The read-aloud button's disc, before the shadow margin: the dictation pill's control
+    /// a fifth larger, because this one stands alone with no capsule to find it by.
+    static let readAloudDiameter: CGFloat = HUDSize.full.controlSize * 1.2
+
     func present() {
-        let hud = controller.needsFullHUD ? HUDSize.full : Settings.shared.hudSize
-        let size = Self.panelSize(for: hud)
+        let size: CGSize
+        if controller.showsReadAloudButton {
+            let side = Self.readAloudDiameter + Self.shadowMargin * 2
+            size = CGSize(width: side, height: side)
+        } else {
+            size = Self.panelSize(for: controller.needsFullHUD ? .full : Settings.shared.hudSize)
+        }
 
         // Every active state change (starting → listening → finishing) calls this. Without
         // the early exit the panel would reset to alpha 0 and re-fade on each one, which

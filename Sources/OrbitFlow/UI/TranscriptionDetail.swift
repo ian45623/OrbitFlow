@@ -36,7 +36,7 @@ struct TranscriptionDetail: View {
     /// Read all versions in one scroll instead of one at a time.
     @State private var isComparing = false
     @State private var engine: Engine = .cloud
-    /// Read once rather than per redraw: this is a Keychain query, not a property.
+    /// Read once rather than per redraw: this is a file read, not a property.
     @State private var hasKey = false
 
     private enum Engine: Hashable { case cloud, onDevice }
@@ -77,7 +77,7 @@ struct TranscriptionDetail: View {
         }
         .background(DS.Color.canvas)
         .task {
-            hasKey = Keychain.hasKey(account: settings.aiProvider.rawValue)
+            hasKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""
             savedSource = source
@@ -428,7 +428,7 @@ struct TranscriptionDetail: View {
         let engine = self.engine
         let provider = settings.aiProvider
         let model = settings.aiModel
-        let key = engine == .cloud ? (Keychain.read(account: provider.rawValue) ?? "") : ""
+        let key = engine == .cloud ? (KeyStore.read(account: provider.rawValue) ?? "") : ""
         let engineLabel = self.engineLabel
 
         Task {

@@ -198,7 +198,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     || self.controller.notice != nil
                     || self.controller.isRewriting
                     || self.controller.isReadAloudShowing
-                if wanted { self.hud?.present() } else { self.hud?.dismiss() }
+                if wanted {
+                    // Before `present`, which reads it for the window's size.
+                    self.controller.refreshPillShape()
+                    self.hud?.present()
+                } else {
+                    self.hud?.dismiss()
+                }
                 self.observeState()
             }
         }

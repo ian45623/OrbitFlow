@@ -387,15 +387,14 @@ struct HUDButton: View {
 
     let kind: Kind
     let size: CGFloat
-    /// Overrides the tooltip, for a kind reused with a different meaning — the read-aloud
-    /// pill's ✕ doesn't discard a recording.
-    var help: String?
     let action: () -> Void
 
     @State private var isHovering = false
 
-    /// The one button on the pill that moves things forward gets the accent disc.
-    private var isPrimary: Bool { kind == .confirm || kind == .play }
+    /// Confirming a dictation is the one thing on the pill that gets the accent disc. ▶ and
+    /// ■ stay the dark disc the pill's other controls use: read aloud's button stands alone
+    /// over whatever you were reading, and a bright disc there reads as an alert.
+    private var isPrimary: Bool { kind == .confirm }
 
     private var glyph: String {
         switch kind {
@@ -433,7 +432,7 @@ struct HUDButton: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .animation(DS.Motion.press, value: isHovering)
-        .help(help ?? defaultHelp)
+        .help(defaultHelp)
     }
 }
 

@@ -86,7 +86,7 @@ final class RewriteService: NSObject {
         let settings = Settings.shared
         let provider = settings.aiProvider
         let model = settings.aiModel
-        let hasKey = Keychain.hasKey(account: provider.rawValue)
+        let hasKey = KeyStore.hasKey(account: provider.rawValue)
 
         let engine: OnDemandRewrite.Engine
         switch OnDemandRewrite.engine(
@@ -102,7 +102,7 @@ final class RewriteService: NSObject {
             return
         }
 
-        let key = engine == .cloud ? (Keychain.read(account: provider.rawValue) ?? "") : ""
+        let key = engine == .cloud ? (KeyStore.read(account: provider.rawValue) ?? "") : ""
         controller.setRewriting(true)
 
         Task { @MainActor in

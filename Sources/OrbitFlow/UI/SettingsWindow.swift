@@ -16,8 +16,8 @@ struct SettingsPanel: View {
     @State private var settings = Settings.shared
     @State private var speaker = Speaker.shared
 
-    /// Typed into, then saved to the Keychain and cleared. Never populated *from* the
-    /// Keychain — the UI shows that a key exists, not what it is.
+    /// Typed into, then saved to the key store and cleared. Never populated *from* the
+    /// store — the UI shows that a key exists, not what it is.
     @State private var keyDraft = ""
     @State private var hasStoredKey = false
     @State private var isTesting = false
@@ -403,8 +403,9 @@ struct SettingsPanel: View {
             }
             .toggleStyle(.switch)
             note("Highlight text with the mouse in any app and the pill offers ▶. Whatever you "
-                + "play is saved to History. Works in apps that share their selection with "
-                + "macOS — most native apps; some browsers and Electron apps don't.")
+                + "play is saved to History. Where an app doesn't share its selection with "
+                + "macOS — web pages in Chrome, Word, Cursor and VS Code — ▶ copies the "
+                + "selection to read it, then puts your clipboard back.")
 
             Hairline()
 
@@ -590,18 +591,18 @@ struct SettingsPanel: View {
     }
 
     private func refreshKeyPresence() {
-        hasStoredKey = Keychain.hasKey(account: settings.aiProvider.rawValue)
+        hasStoredKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
     }
 
     private func saveKey() {
         let key = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        guard Keychain.save(key, account: settings.aiProvider.rawValue) else {
+        guard KeyStore.save(key, account: settings.aiProvider.rawValue) else {
             // Do not clear the draft — the user would lose what they typed with nothing
             // stored, and the row below would claim a key is saved because the previous
             // item is still there.
-            testResult = .failure("Couldn't save the key to the Keychain. Unlock your "
-                + "login keychain and try again.")
+            testResult = .failure("Couldn't save the key. Check that ~/Library/Application "
+                + "Support/OrbitFlow is writable and try again.")
             return
         }
         keyDraft = ""
@@ -610,7 +611,7 @@ struct SettingsPanel: View {
     }
 
     private func removeKey() {
-        Keychain.delete(account: settings.aiProvider.rawValue)
+        KeyStore.delete(account: settings.aiProvider.rawValue)
         keyDraft = ""
         testResult = nil
         availableModels = []
@@ -623,7 +624,7 @@ struct SettingsPanel: View {
     /// Fetches the provider's model list. This is the only place a key problem is
     /// legible — everywhere else it degrades quietly to the rule pass.
     private func runTest() {
-        guard let key = Keychain.read(account: settings.aiProvider.rawValue), !key.isEmpty else {
+        guard let key = KeyStore.read(account: settings.aiProvider.rawValue), !key.isEmpty else {
             testResult = .failure("Save an API key first.")
             return
         }

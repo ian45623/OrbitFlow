@@ -115,7 +115,7 @@ final class Settings {
         didSet { defaults.set(aiRewriteUse.rawValue, forKey: Keys.aiRewriteUse) }
     }
 
-    /// Which cloud provider the rewrite tier calls. The API key lives in the Keychain,
+    /// Which cloud provider the rewrite tier calls. The API key lives in the key store,
     /// never here.
     var aiProvider: AIProvider {
         didSet { defaults.set(aiProvider.rawValue, forKey: Keys.aiProvider) }

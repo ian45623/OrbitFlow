@@ -25,7 +25,13 @@ final class HotkeyMonitor {
     /// made by dragging or double-clicking is finished. Always passed through untouched,
     /// and nothing about the click is read here: the tap is disabled by macOS if it runs
     /// slowly, so the selection is looked up afterwards, by the caller.
-    var onMouseUp: (() -> Void)?
+    ///
+    /// The argument says whether the press looked like a selection — a drag, or a double- or
+    /// triple-click — which matters for apps that won't tell Accessibility what's selected.
+    var onMouseUp: ((_ isSelectionGesture: Bool) -> Void)?
+
+    /// Where the left button last went down, to measure a drag on the way back up.
+    private var mouseDownLocation: CGPoint?
 
     /// Escape was pressed. Return `true` to swallow it, `false` to let it through.
     ///
@@ -47,12 +53,13 @@ final class HotkeyMonitor {
         var mask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
-        // `leftMouseUp` is here only while read aloud is on, and is only ever forwarded. This
+        // `leftMouseDown`/`leftMouseUp` are here only while read aloud is on, and are only ever
+        // forwarded. This
         // is an active tap, so every event in the mask waits on this app's main run loop
         // before reaching its destination — not something to put every click on the system
         // through for a feature that is off. Settings rebuilds the tap when it's toggled.
         if Settings.shared.readAloudEnabled {
-            mask |= 1 << CGEventType.leftMouseUp.rawValue
+            mask |= (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
         }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
@@ -71,14 +78,20 @@ final class HotkeyMonitor {
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let flags = event.flags
                 let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+                let location = event.location
+                let clickCount = event.getIntegerValueField(.mouseEventClickState)
                 let consume = MainActor.assumeIsolated {
-                    monitor.handle(type: type, keyCode: keyCode, flags: flags, isRepeat: isRepeat)
+                    monitor.handle(
+                        type: type, keyCode: keyCode, flags: flags, isRepeat: isRepeat,
+                        location: location, clickCount: clickCount
+                    )
                 }
                 return consume ? nil : Unmanaged.passUnretained(event)
             },
             userInfo: refcon
         ) else {
             Log.hotkey.error("tapCreate failed — Accessibility permission missing?")
+            readAloudTrace("tapCreate FAILED")
             return false
         }
 
@@ -89,6 +102,7 @@ final class HotkeyMonitor {
         CGEvent.tapEnable(tap: tap, enable: true)
 
         Log.hotkey.info("listening for \(ShortcutKeys.displaySummary(self.keys))")
+        readAloudTrace("tap started mouseUp=\(Settings.shared.readAloudEnabled)")
         return true
     }
 
@@ -107,7 +121,10 @@ final class HotkeyMonitor {
     // MARK: - Tap callback
 
     /// - Returns: `true` if the event should be swallowed rather than passed along.
-    private func handle(type: CGEventType, keyCode: Int64, flags: CGEventFlags, isRepeat: Bool) -> Bool {
+    private func handle(
+        type: CGEventType, keyCode: Int64, flags: CGEventFlags, isRepeat: Bool,
+        location: CGPoint, clickCount: Int64
+    ) -> Bool {
         // The system disables a tap that runs too slowly or is interrupted; re-arm it.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -159,8 +176,15 @@ final class HotkeyMonitor {
             onRelease?()
             return true
 
+        case .leftMouseDown:
+            mouseDownLocation = location
+            return false
+
         case .leftMouseUp:
-            onMouseUp?()
+            let start = mouseDownLocation ?? location
+            mouseDownLocation = nil
+            let distance = hypot(location.x - start.x, location.y - start.y)
+            onMouseUp?(isSelectionGesture(dragDistance: distance, clickCount: clickCount))
             return false
 
         default:

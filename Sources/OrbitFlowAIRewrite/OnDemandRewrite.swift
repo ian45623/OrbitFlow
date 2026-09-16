@@ -31,7 +31,7 @@ public enum OnDemandRewrite {
     }
 
     /// - Parameters:
-    ///   - hasKey: Whether the Keychain holds a key for the *current* provider. Switching
+    ///   - hasKey: Whether a key is stored for the *current* provider. Switching
     ///     providers switches which key this asks about.
     ///   - model: The configured model id. Blank is not a working cloud setup — the
     ///     request would fail — so it falls back exactly as a missing key does.
