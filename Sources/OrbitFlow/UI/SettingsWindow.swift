@@ -754,6 +754,10 @@ struct SettingsPanel: View {
         keyDraft = ""
         testResult = nil
         refreshKeyPresence()
+        // A key just saved here may be for the same provider the read-aloud override
+        // points at — "AI for reading modes" has to notice immediately, not just when
+        // its own picker changes.
+        refreshElevenLabsKeyPresence()
     }
 
     private func removeKey() {
@@ -762,6 +766,9 @@ struct SettingsPanel: View {
         testResult = nil
         availableModels = []
         refreshKeyPresence()
+        // Same reasoning as in saveKey(): the override's key-presence note reads this
+        // provider's key too.
+        refreshElevenLabsKeyPresence()
         // A cloud rewrite with no key for this provider falls back on every call. Don't
         // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
         if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
@@ -857,14 +864,26 @@ struct SettingsPanel: View {
                     return
                 }
                 elevenLabsVoices = voices
-
-                let (modelData, _) = try await URLSession.shared
-                    .data(for: ElevenLabs.modelsRequest(key: key))
-                elevenLabsModels = ElevenLabs.models(from: modelData)
-
                 if settings.elevenLabsVoiceID.isEmpty {
                     settings.elevenLabsVoiceID = voices[0].id
                 }
+
+                let (modelData, modelResponse) = try await URLSession.shared
+                    .data(for: ElevenLabs.modelsRequest(key: key))
+                if let http = modelResponse as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    // The voices call above already proved the key and the account work —
+                    // this failure belongs to the models endpoint alone, and must not read
+                    // as the connection itself being broken.
+                    elevenLabsModels = []
+                    elevenLabsTest = .failure(
+                        ElevenLabs.failureMessage(from: modelData)
+                            ?? "Voices loaded, but the model list didn't (HTTP \(http.statusCode))."
+                    )
+                    return
+                }
+                elevenLabsModels = ElevenLabs.models(from: modelData)
+
                 // `TestResult.success` carries a model count and `resultRow` renders it as
                 // "Connected. N models available." — which is literally true here, so the
                 // existing row is reused rather than given a second shape. The voice count
