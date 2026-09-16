@@ -181,7 +181,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     }
 
     private func settle() {
-        guard !synthesizer.isSpeaking else { return }
+        // An ElevenLabs `speak()` calls `stop()` first, which cancels a queued system
+        // utterance and fires `didCancel` — but queues no utterance of its own, so without
+        // the extra checks this would race the ElevenLabs path and wipe the `text` it just
+        // set before a sound is ever made.
+        guard !synthesizer.isSpeaking, !isPreparing, player == nil else { return }
         text = nil
         isSpeaking = false
     }
@@ -195,8 +199,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         // itself — crosses into the MainActor closure below.
         let finished = ObjectIdentifier(player)
         Task { @MainActor in
-            // A newer passage may already be playing through a different player.
-            guard let current = self.player, ObjectIdentifier(current) == finished else { return }
+            // A newer passage may already be playing through a different player. `isPlaying`
+            // guards against a recycled address aliasing `finished`: a freed player's memory
+            // could be reused for a new one, but a reused address can only alias a player
+            // that is currently playing, never one that has already finished.
+            guard let current = self.player, ObjectIdentifier(current) == finished,
+                  !current.isPlaying
+            else { return }
             self.player = nil
             self.text = nil
             self.isSpeaking = false

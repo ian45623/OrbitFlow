@@ -440,8 +440,14 @@ struct SettingsPanel: View {
                 // hard to set.
                 // ponytail: fixed range, widen it if someone asks for faster listening.
                 Slider(value: $settings.readAloudRate, in: 0.3...0.75)
-                ActionButton(title: speaker.isSpeaking ? "Stop" : "Preview", kind: .secondary) {
-                    if speaker.isSpeaking {
+                // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
+                // before a sound is made, and a second press during that window would
+                // cancel a request already billed and send a duplicate.
+                ActionButton(
+                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview",
+                    kind: .secondary
+                ) {
+                    if speaker.isSpeaking || speaker.isPreparing {
                         speaker.stop()
                     } else {
                         speaker.speak("This is how highlighted text will sound.")

@@ -89,9 +89,11 @@ final class DictationController {
     /// is what lets a new highlight be offered while the previous one is still being read.
     private(set) var readAloudOffer: ReadAloudOffer?
 
-    /// What the capsule says while it is working: the mode's status label during a
-    /// transform, then "Generating voice…" while ElevenLabs renders. Nil when the capsule
-    /// should show the mode menu instead.
+    /// What the capsule says while a transform is working: the mode's status label, such
+    /// as "Summarizing…". Nil once the transform hands off to `Speaker` — including while
+    /// ElevenLabs renders, which `HUDView` shows itself from `Speaker.shared.isPreparing`
+    /// rather than through this property. Also nil when the capsule should show the mode
+    /// menu instead.
     private(set) var readAloudStatus: String?
 
     /// A failure the user must see — a rejected key, an exhausted quota, a transform that
@@ -108,6 +110,12 @@ final class DictationController {
     /// the length of a network round trip between the offer being cleared and `Speaker`
     /// starting, and without this the pill would vanish for that whole window, hiding the
     /// "Summarizing…" label, every error, and the ✕ that is the only way to cancel it.
+    ///
+    /// `Speaker.shared.isPreparing` and `.failure` are here for the same reason on the far
+    /// side of the handoff: a networked voice has its own window where `isSpeaking` is
+    /// still false — after `speak()` returns, before the first word — and a failure that
+    /// lands after that window must not be shown on a pill that has already dismissed for
+    /// having nothing left to say.
     var isReadAloudShowing: Bool {
         readAloudOffer != nil
             || readAloudStatus != nil
@@ -292,7 +300,10 @@ final class DictationController {
                 self.discard()
                 return true
             }
-            if Speaker.shared.isSpeaking {
+            // `isPreparing` covers ElevenLabs rendering: `speak()` returns before any
+            // sound is made, and without this Escape would fall through to the app
+            // underneath and leave a billed request running uncancelled.
+            if Speaker.shared.isSpeaking || Speaker.shared.isPreparing {
                 self.stopReadingAloud()
                 return true
             }

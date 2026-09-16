@@ -95,13 +95,16 @@ struct TranscriptionDetail: View {
                 // otherwise the text on the left. Replaying doesn't file a new entry — this
                 // one is already in History.
                 let spoken = current?.text ?? source
+                // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
+                // before a sound is made, and a second press during that window would
+                // cancel a request already billed and send a duplicate.
                 ActionButton(
-                    title: speaker.isSpeaking ? "Stop" : "Read aloud",
-                    systemImage: speaker.isSpeaking ? "stop.fill" : "play.fill",
+                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Read aloud",
+                    systemImage: speaker.isSpeaking || speaker.isPreparing ? "stop.fill" : "play.fill",
                     kind: .quiet,
-                    isEnabled: speaker.isSpeaking || !spoken.trimmed.isEmpty
+                    isEnabled: speaker.isSpeaking || speaker.isPreparing || !spoken.trimmed.isEmpty
                 ) {
-                    if speaker.isSpeaking {
+                    if speaker.isSpeaking || speaker.isPreparing {
                         speaker.stop()
                     } else {
                         speaker.speak(spoken)
