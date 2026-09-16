@@ -65,11 +65,54 @@ struct ReadingModeTests {
 
     /// The mode is worthless if the model hedges into two sentences, so the prompt has to
     /// refuse the obvious workaround as well as the obvious violation.
-    @Test("One line asks for one sentence and closes the semicolon loophole")
+    @Test("One line states a hard word limit and closes the run-on loopholes")
     func oneLineIsOneSentence() {
         let prompt = ReadingMode.oneLine.systemPrompt
-        #expect(prompt.contains("ONE sentence"))
-        #expect(prompt.contains("semicolon"))
+        #expect(prompt.contains("no more than \(ReadingMode.oneLine.maxWords!) words"))
+        #expect(prompt.contains("hard limit"))
+        #expect(prompt.contains("semicolons"))
+    }
+
+    /// A model asked for one sentence will happily write one sentence a paragraph long, so
+    /// "one line" has to be enforced on the output, not just requested in the prompt.
+    @Test("One line keeps only the first sentence")
+    func oneLineKeepsFirstSentence() {
+        let out = ReadingMode.oneLine.enforce(
+            "Rates rose because inflation stayed high. Markets fell. Analysts expect more."
+        )
+        #expect(out == "Rates rose because inflation stayed high.")
+    }
+
+    @Test("One line cuts a single run-on sentence down to the word cap")
+    func oneLineCapsWords() {
+        let runOn = (1...60).map { "word\($0)" }.joined(separator: " ") + "."
+        let out = ReadingMode.oneLine.enforce(runOn)
+        let words = out.split(whereSeparator: \.isWhitespace)
+        #expect(words.count == ReadingMode.oneLine.maxWords)
+        #expect(out.hasSuffix("."))
+        #expect(!out.hasSuffix(".."))
+    }
+
+    /// Abbreviations are where a naive split on ". " breaks: "U.S." would end the line
+    /// after two letters.
+    @Test("One line does not split on an abbreviation")
+    func oneLineHandlesAbbreviations() {
+        let out = ReadingMode.oneLine.enforce("The U.S. economy grew 3% last year. It slowed after.")
+        #expect(out == "The U.S. economy grew 3% last year.")
+    }
+
+    @Test("A sentence already inside the cap passes through untouched")
+    func oneLineShortPassesThrough() {
+        #expect(ReadingMode.oneLine.enforce("Short and done.") == "Short and done.")
+    }
+
+    @Test("Only One line is capped; every other mode's output is returned as-is")
+    func otherModesUncapped() {
+        let long = "First sentence here. Second sentence here. Third one too."
+        for mode in ReadingMode.allCases where mode != .oneLine {
+            #expect(mode.maxWords == nil)
+            #expect(mode.enforce(long) == long)
+        }
     }
 
     /// Every name has to fit a capsule sized for a mode name and a speed, so this is a

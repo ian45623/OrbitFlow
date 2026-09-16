@@ -142,13 +142,15 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             """
         case .oneLine:
             """
-            Reduce the passage to ONE sentence. Not two, and not one sentence with a \
-            semicolon doing the work of two. However long the passage is, the answer is a \
-            single sentence that someone could repeat from memory.
+            Reduce the passage to ONE short line: a single sentence of no more than 20 \
+            words. This is a hard limit, not a target — count them. Not two sentences, not \
+            one sentence stretched with commas, semicolons or dashes to carry what two would. \
+            However long the passage is, the answer fits on one line and could be said in \
+            one breath.
 
-            Say what the passage is actually about and what it concludes. Where you cannot \
-            fit both, keep the conclusion. Do not begin with "This passage" or "The text" — \
-            state the thing itself.
+            Say what the passage concludes. If you cannot also fit what it is about, drop \
+            that and keep the conclusion. Do not begin with "This passage", "The text" or \
+            "The author" — state the thing itself.
             """
         case .toThePoint:
             """
@@ -216,6 +218,49 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             // Never used — callers build the custom prompt with `customSystemPrompt`.
             ""
         }
+    }
+
+    /// The most words this mode's output may contain, or nil for no limit.
+    ///
+    /// Only One line has one, because it is the only mode defined by its length. A prompt
+    /// asking for "one sentence" does not bound length at all — a model will write one
+    /// sentence a paragraph long and technically comply — so the limit is stated in the
+    /// prompt *and* enforced on the output by `enforce(_:)`.
+    public var maxWords: Int? {
+        self == .oneLine ? 20 : nil
+    }
+
+    /// Holds output to this mode's shape, whatever the model actually returned.
+    ///
+    /// For One line: keep the first sentence, then cut to `maxWords`. The prompt asks for
+    /// both, and this is what makes it true rather than likely. Every other mode passes
+    /// through untouched.
+    ///
+    /// Sentences come from Foundation's `.bySentences` enumeration rather than a split on
+    /// ". ", which would end the line two letters into "The U.S. economy".
+    public func enforce(_ output: String) -> String {
+        guard let maxWords else { return output }
+
+        var first = output
+        output.enumerateSubstrings(
+            in: output.startIndex..<output.endIndex, options: .bySentences
+        ) { substring, _, _, stop in
+            if let substring {
+                first = substring
+                stop = true
+            }
+        }
+        first = first.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let words = first.split(whereSeparator: \.isWhitespace)
+        guard words.count > maxWords else { return first }
+
+        // Cut, then end on a full stop so the voice lands the sentence instead of
+        // trailing off. Strip whatever punctuation the cut left behind first, so a line
+        // that ended "…inflation," does not become "…inflation,."
+        let cut = words.prefix(maxWords).joined(separator: " ")
+            .trimmingCharacters(in: .punctuationCharacters)
+        return cut + "."
     }
 
     /// How fast the voice reads, as a multiple of its natural rate.

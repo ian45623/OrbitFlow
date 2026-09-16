@@ -633,7 +633,10 @@ final class DictationController {
                 // A newer selection or mode switch superseded this one while it ran.
                 guard transformToken == token else { return }
 
-                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                // `enforce` before anything else sees it — the cache, History, the voice — so
+                // a model that ignored One line's word limit is still held to one line, and
+                // what is saved is what was heard.
+                let trimmed = mode.enforce(output.trimmingCharacters(in: .whitespacesAndNewlines))
                 guard !trimmed.isEmpty else {
                     failed("Empty", source: source)
                     return
