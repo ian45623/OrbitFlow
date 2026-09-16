@@ -100,10 +100,19 @@ final class DictationController {
     /// user is owed an answer.
     private(set) var readAloudError: String?
 
-    /// Whether the pill is in read-aloud mode: something offered, or something being read —
-    /// from the pill, the History page, or the Settings preview.
+    /// Whether the pill is in read-aloud mode: something offered, something transforming,
+    /// something being read, or a failure the user hasn't dismissed yet — from the pill,
+    /// the History page, or the Settings preview.
+    ///
+    /// `readAloudStatus` and `readAloudError` have to be here too: a transform can run for
+    /// the length of a network round trip between the offer being cleared and `Speaker`
+    /// starting, and without this the pill would vanish for that whole window, hiding the
+    /// "Summarizing…" label, every error, and the ✕ that is the only way to cancel it.
     var isReadAloudShowing: Bool {
-        readAloudOffer != nil || Speaker.shared.isSpeaking
+        readAloudOffer != nil
+            || readAloudStatus != nil
+            || readAloudError != nil
+            || Speaker.shared.isSpeaking
     }
 
     /// Whether the pill needs full width right now regardless of the Compact setting.
@@ -285,6 +294,13 @@ final class DictationController {
                 self.stopReadingAloud()
                 return true
             }
+            // Between the offer being cleared and Speaker starting, a transform can be
+            // running with nothing else to show it's there — this is what Escape has to
+            // reach to cancel a summary mid-flight.
+            if self.readAloudStatus != nil {
+                self.stopReadingAloud()
+                return true
+            }
             if self.readAloudOffer != nil { self.stopReadingAloud() }
             return false
         }
@@ -395,6 +411,10 @@ final class DictationController {
         // A notice is feedback for something the user just did; an offer is a guess about
         // what they might want. The notice wins.
         readAloudOffer = nil
+        // The user has moved on to whatever produced this notice — abandon any transform
+        // still running so it can't arrive later and speak over something else.
+        transformToken = UUID()
+        readAloudStatus = nil
         notice = message
         noticeToken = UUID()
         let token = noticeToken
@@ -412,6 +432,10 @@ final class DictationController {
         if running {
             notice = nil
             readAloudOffer = nil
+            // The user has moved on to an on-demand rewrite — abandon any read-aloud
+            // transform still running so it can't arrive later and speak over it.
+            transformToken = UUID()
+            readAloudStatus = nil
         }
         isRewriting = running
     }
@@ -497,6 +521,17 @@ final class DictationController {
         if let cached = transformCache[mode] {
             readAloudStatus = nil
             Speaker.shared.speak(cached)
+            return
+        }
+
+        // The menu disables Custom while the instruction is blank, but Settings can leave
+        // `readingMode` on `.custom` after the user clears the field there — and a blank
+        // instruction still produces a preamble-only prompt, which would bill for nothing.
+        if mode == .custom,
+           Settings.shared.readingModeCustomInstruction
+               .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            readAloudStatus = nil
+            readAloudError = "Add an instruction for your custom mode in Settings."
             return
         }
 
@@ -586,7 +621,7 @@ final class DictationController {
                 // being handed the whole page instead is the one outcome this feature
                 // exists to prevent.
                 readAloudError = (error as? RewriteFailure)?.summary
-                    ?? "Couldn't rewrite that selection."
+                    ?? OnDeviceRewriter.describe(error)
             }
         }
     }
@@ -611,6 +646,9 @@ final class DictationController {
         readAloudStatus = nil
         readAloudError = nil
         readAloudSource = nil
+        transformCache = [:]
+        lengthConfirmed = false
+        readAloudRunID = nil
         Speaker.shared.stop()
     }
 
@@ -622,10 +660,17 @@ final class DictationController {
         Settings.shared.readingMode = mode
         readAloudError = nil
 
-        let wasSpeaking = Speaker.shared.isSpeaking || Speaker.shared.isPreparing
+        // A transform in flight counts as "already playing" here — `wasSpeaking` alone is
+        // false for the whole window between the offer clearing and `Speaker` starting,
+        // which would otherwise abandon the in-flight call below and start nothing to
+        // replace it.
+        let wasSpeaking = Speaker.shared.isSpeaking
+            || Speaker.shared.isPreparing
+            || readAloudStatus != nil
         let source = readAloudSource
         Speaker.shared.stop()
         transformToken = UUID()
+        readAloudStatus = nil
 
         guard wasSpeaking, let source else { return }
         transformAndSpeak(source, mode: mode)
@@ -686,12 +731,16 @@ final class DictationController {
     /// Shows ▶ for `offer`, fading after five seconds if it isn't pressed.
     private func offerReadAloud(_ offer: ReadAloudOffer) {
         readAloudOffer = offer
-        // A new selection invalidates everything derived from the old one.
+        // A new selection invalidates everything derived from the old one — including a
+        // transform still in flight for the old one, which must not be allowed to resume,
+        // speak over this offer, and poison this selection's cache with the old text.
         transformCache = [:]
         lengthConfirmed = false
         readAloudRunID = nil
         readAloudSource = nil
         readAloudError = nil
+        transformToken = UUID()
+        readAloudStatus = nil
         // A new offer appears where the last one was; a pointer left resting there from
         // before shouldn't pin it open, and SwiftUI won't report the exit of a view it
         // already replaced.
@@ -713,7 +762,12 @@ final class DictationController {
     func setHoveringReadAloud(_ hovering: Bool) {
         readAloudTrace("hover=\(hovering)")
         isHoveringReadAloud = hovering
-        if !hovering, readAloudOffer != nil, !isCopyingSelection { scheduleOfferFade() }
+        // A confirmed long-selection question must stay up until answered — it already
+        // skipped its own fade in `begin(_:)`, and re-arming one here on mouse-out would
+        // silently dismiss the question the comment there says must not happen.
+        if !hovering, readAloudOffer != nil, !isCopyingSelection, !lengthConfirmed {
+            scheduleOfferFade()
+        }
     }
 
     // MARK: - Dictation
@@ -724,6 +778,11 @@ final class DictationController {
         // Speech is left alone until just before capture — see there.
         offerToken = UUID()
         readAloudOffer = nil
+        // The talk key means the user is dictating now — a transform that resumes after
+        // this must not call `Speaker.shared.speak` into the microphone that's about to
+        // open.
+        transformToken = UUID()
+        readAloudStatus = nil
         isLatched = false
         runToken = UUID()
         state = .starting
