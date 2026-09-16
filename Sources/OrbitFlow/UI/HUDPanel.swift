@@ -93,18 +93,14 @@ final class HUDPanel: NSPanel {
     /// Dock, not in the middle of what you're reading.
     static let dockGap: CGFloat = 40
 
-    /// The read-aloud button's disc, before the shadow margin: the dictation pill's control
-    /// a fifth larger, because this one stands alone with no capsule to find it by.
-    static let readAloudDiameter: CGFloat = HUDSize.full.controlSize * 1.2
-
     func present() {
-        let size: CGSize
-        if controller.showsReadAloudButton {
-            let side = Self.readAloudDiameter + Self.shadowMargin * 2
-            size = CGSize(width: side, height: side)
-        } else {
-            size = Self.panelSize(for: controller.needsFullHUD ? .full : Settings.shared.hudSize)
-        }
+        // Read aloud borrows Full's capsule: it now carries three controls and a mode
+        // menu, which is exactly what Full was already sized for.
+        let size = Self.panelSize(
+            for: controller.showsReadAloudButton || controller.needsFullHUD
+                ? .full
+                : Settings.shared.hudSize
+        )
 
         // Every active state change (starting → listening → finishing) calls this. Without
         // the early exit the panel would reset to alpha 0 and re-fade on each one, which

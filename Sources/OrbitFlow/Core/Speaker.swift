@@ -15,6 +15,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = Speaker()
 
     private(set) var isSpeaking = false
+    /// True while a networked voice renders the audio — after ▶, before the first word.
+    /// Nothing sets this yet; the ElevenLabs backend that does lands in a later task. The
+    /// capsule already has to render the state, which is why the property is here first.
+    private(set) var isPreparing = false
     /// What is being spoken, so the pill can show it next to the ■.
     private(set) var text: String?
 

@@ -392,8 +392,8 @@ struct HUDButton: View {
     @State private var isHovering = false
 
     /// Confirming a dictation is the one thing on the pill that gets the accent disc. ▶ and
-    /// ■ stay the dark disc the pill's other controls use: read aloud's button stands alone
-    /// over whatever you were reading, and a bright disc there reads as an alert.
+    /// ■ stay the dark disc the pill's other controls use: read aloud appears over whatever
+    /// you were reading, unasked, and a bright disc there reads as an alert.
     private var isPrimary: Bool { kind == .confirm }
 
     private var glyph: String {

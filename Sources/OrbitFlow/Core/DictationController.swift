@@ -89,6 +89,17 @@ final class DictationController {
     /// is what lets a new highlight be offered while the previous one is still being read.
     private(set) var readAloudOffer: ReadAloudOffer?
 
+    /// What the capsule says while it is working: the mode's status label during a
+    /// transform, then "Generating voice…" while ElevenLabs renders. Nil when the capsule
+    /// should show the mode menu instead.
+    private(set) var readAloudStatus: String?
+
+    /// A failure the user must see — a rejected key, an exhausted quota, a transform that
+    /// timed out. Shown in place of the menu label, in caution amber, and cleared by the
+    /// next ▶ or ✕. Unlike an offer, this never fades on a timer: once ▶ is pressed the
+    /// user is owed an answer.
+    private(set) var readAloudError: String?
+
     /// Whether the pill is in read-aloud mode: something offered, or something being read —
     /// from the pill, the History page, or the Settings preview.
     var isReadAloudShowing: Bool {
@@ -430,7 +441,21 @@ final class DictationController {
     func stopReadingAloud() {
         offerToken = UUID()
         readAloudOffer = nil
+        readAloudStatus = nil
+        readAloudError = nil
         Speaker.shared.stop()
+    }
+
+    /// The capsule's mode menu. Persists the choice, and — once something is already
+    /// playing — restarts it under the new mode, because the menu is a live control rather
+    /// than a preference for next time.
+    func setReadingMode(_ mode: ReadingMode) {
+        guard mode != Settings.shared.readingMode else { return }
+        Settings.shared.readingMode = mode
+        readAloudError = nil
+        // Task 6 replaces this with a re-transform. Until then, switching mode while
+        // speaking simply stops — there is nothing different to say yet.
+        if Speaker.shared.isSpeaking { Speaker.shared.stop() }
     }
 
     private func mouseReleased(isGesture: Bool) {
