@@ -218,6 +218,32 @@ final class DictationController {
     /// The pointer is over the read-aloud button, so an offer must not fade from under it.
     private var isHoveringReadAloud = false
 
+    /// Transformed text for the current selection, keyed by mode.
+    ///
+    /// You will cycle modes to find the one you want, and every cycle back to a mode you
+    /// already heard would otherwise be a second charge for text we already have. Dropped
+    /// whenever the selection changes, so it holds at most nine entries and needs no
+    /// eviction policy.
+    private var transformCache: [ReadingMode: String] = [:]
+
+    /// Set once the long-selection warning has been shown for this selection, so the
+    /// second ▶ plays instead of asking again.
+    private var lengthConfirmed = false
+
+    /// Identifies the running transform, so a selection change or a mode switch abandons
+    /// the old one rather than letting it arrive and speak over the new one.
+    private var transformToken = UUID()
+
+    /// The run this selection was filed under, so a completed transform can be appended
+    /// to it rather than creating a second History entry.
+    private var readAloudRunID: UUID?
+
+    /// The passage the current playback came from, so a mode switch has something to
+    /// re-transform. Held rather than re-read from the run log: switching mode would
+    /// otherwise decode the user's entire history from disk to recover a string we were
+    /// just holding.
+    private var readAloudSource: String?
+
     private var holdStarted: Date?
     private var releasedAt: Date?
     private var engineName = ""
@@ -392,19 +418,21 @@ final class DictationController {
 
     // MARK: - Read aloud
 
-    /// ▶ on the pill: get the text if it isn't in hand yet, file it in History, read it.
+    /// ▶ on the capsule: get the text if it isn't in hand yet, file it in History,
+    /// transform it if the mode asks for that, then read it.
     ///
-    /// Filed only here, never on highlight. Selecting text is constant — to delete it, drag
-    /// it, copy an address — and History should hold what the user chose to hear.
+    /// Filed only here, never on highlight. Selecting text is constant — to delete it,
+    /// drag it, copy an address — and History should hold what the user chose to hear.
     func readAloud() {
         guard let offer = readAloudOffer else { return }
         // Pressed, so it must not fade out from under a copy that's still running.
         offerToken = UUID()
+        readAloudError = nil
 
         switch offer {
         case .text(let text):
             readAloudOffer = nil
-            recordAndSpeak(text)
+            begin(text)
         case .copy:
             guard !isCopyingSelection else { return }
             isCopyingSelection = true
@@ -419,43 +447,188 @@ final class DictationController {
                     flash("Couldn't copy that selection.")
                     return
                 }
-                recordAndSpeak(text)
+                begin(text)
             }
         }
     }
 
-    private func recordAndSpeak(_ text: String) {
-        RunLog.record(
-            DictationRun(
-                date: Date(),
-                engine: "Read aloud",
-                audioSeconds: 0,
-                processSeconds: 0,
-                text: text
-            )
+    /// The length gate, then History, then the pipeline.
+    private func begin(_ text: String) {
+        let mode = Settings.shared.readingMode
+
+        // Only As-is can reach this: every other mode shrinks the passage before a
+        // character is billed, so warning about the input length would be the wrong number.
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        if ReadingMode.needsLengthConfirm(
+            mode: mode, wordCount: words, alreadyAsked: lengthConfirmed
+        ) {
+            lengthConfirmed = true
+            // Put the offer back so ▶ is still there to press a second time, and hold the
+            // capsule open — a question that fades before it can be answered is worse than
+            // no question.
+            readAloudOffer = .text(text)
+            readAloudError = "~\(words.formatted()) words — play anyway?"
+            return
+        }
+
+        // Filed before the transform, so a failed summary still leaves the passage saved.
+        let run = DictationRun(
+            date: Date(),
+            engine: "Read aloud",
+            audioSeconds: 0,
+            processSeconds: 0,
+            text: text
         )
-        Speaker.shared.speak(text)
+        RunLog.record(run)
+        readAloudRunID = run.id
+        readAloudSource = text
+
+        transformAndSpeak(text, mode: mode)
+    }
+
+    /// Stage one: get the text this mode wants spoken. Stage two is `Speaker`.
+    private func transformAndSpeak(_ source: String, mode: ReadingMode) {
+        guard mode.usesAI else {
+            readAloudStatus = nil
+            Speaker.shared.speak(source)
+            return
+        }
+
+        if let cached = transformCache[mode] {
+            readAloudStatus = nil
+            Speaker.shared.speak(cached)
+            return
+        }
+
+        let target = resolvedTarget()
+        let engine = OnDemandRewrite.engine(
+            use: Settings.shared.aiRewriteUse,
+            hasKey: KeyStore.hasKey(account: target.provider.rawValue),
+            model: target.model,
+            onDeviceAvailable: OnDeviceRewriter.isAvailable
+        )
+
+        let chosen: OnDemandRewrite.Engine
+        switch engine {
+        case .success(let value):
+            chosen = value
+        case .failure(let unavailable):
+            readAloudStatus = nil
+            readAloudError = unavailable.summary
+            return
+        }
+
+        let system = mode == .custom
+            ? ReadingMode.customSystemPrompt(Settings.shared.readingModeCustomInstruction)
+            : mode.systemPrompt
+        let key = chosen == .cloud
+            ? (KeyStore.read(account: target.provider.rawValue) ?? "")
+            : ""
+        let engineLabel = chosen == .cloud
+            ? "\(target.provider.displayName) · \(target.model)"
+            : "Apple on-device"
+        let runID = readAloudRunID
+
+        transformToken = UUID()
+        let token = transformToken
+        readAloudStatus = mode.statusLabel
+
+        Task { @MainActor in
+            do {
+                let output: String
+                // 30 s, not dictation's 8 s. Nothing is waiting to be typed, and a
+                // page-length summary legitimately takes longer than a sentence cleanup.
+                // The guard is `nil` on purpose: every reading mode violates the
+                // invented-words and length-ratio checks by construction.
+                if chosen == .cloud {
+                    output = try await CloudRewriter(
+                        provider: target.provider, key: key, timeout: .seconds(30)
+                    ).rewrite(source, model: target.model, system: system, checking: nil)
+                } else {
+                    output = try await OnDeviceRewriter.rewrite(
+                        source, system: system, timeout: .seconds(60)
+                    )
+                }
+
+                // A newer selection or mode switch superseded this one while it ran.
+                guard transformToken == token else { return }
+
+                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    readAloudStatus = nil
+                    readAloudError = "That came back empty — try another mode."
+                    return
+                }
+
+                transformCache[mode] = trimmed
+                if let runID {
+                    RunLog.modify(runID) { run in
+                        var rewrites = run.rewrites ?? []
+                        rewrites.append(
+                            Rewrite(
+                                date: Date(),
+                                instruction: mode.displayName,
+                                engine: engineLabel,
+                                source: source,
+                                text: trimmed
+                            )
+                        )
+                        run.rewrites = rewrites
+                    }
+                }
+
+                readAloudStatus = nil
+                Speaker.shared.speak(trimmed)
+            } catch {
+                guard transformToken == token else { return }
+                readAloudStatus = nil
+                // Never fall back to reading the original: you asked for a summary, and
+                // being handed the whole page instead is the one outcome this feature
+                // exists to prevent.
+                readAloudError = (error as? RewriteFailure)?.summary
+                    ?? "Couldn't rewrite that selection."
+            }
+        }
+    }
+
+    /// Which provider and model read aloud bills — the shared pair unless the user split
+    /// them. See `AITarget`.
+    private func resolvedTarget() -> AITarget.Resolved {
+        let settings = Settings.shared
+        return AITarget.resolve(
+            sharedProvider: settings.aiProvider,
+            sharedModel: settings.aiModel,
+            overrideProvider: settings.readAloudProviderOverride,
+            overrideModel: settings.readAloudModelOverride
+        )
     }
 
     /// ✕, ■ and Escape: stop speaking and drop any offer.
     func stopReadingAloud() {
         offerToken = UUID()
+        transformToken = UUID()
         readAloudOffer = nil
         readAloudStatus = nil
         readAloudError = nil
+        readAloudSource = nil
         Speaker.shared.stop()
     }
 
-    /// The capsule's mode menu. Persists the choice, and — once something is already
-    /// playing — restarts it under the new mode, because the menu is a live control rather
-    /// than a preference for next time.
+    /// The capsule's mode menu. A live control, not a preference for next time: change it
+    /// mid-playback and the same passage is re-transformed and spoken from the top. Going
+    /// back to a mode you already heard is served from the cache — free and instant.
     func setReadingMode(_ mode: ReadingMode) {
         guard mode != Settings.shared.readingMode else { return }
         Settings.shared.readingMode = mode
         readAloudError = nil
-        // Task 6 replaces this with a re-transform. Until then, switching mode while
-        // speaking simply stops — there is nothing different to say yet.
-        if Speaker.shared.isSpeaking { Speaker.shared.stop() }
+
+        let wasSpeaking = Speaker.shared.isSpeaking || Speaker.shared.isPreparing
+        let source = readAloudSource
+        Speaker.shared.stop()
+        transformToken = UUID()
+
+        guard wasSpeaking, let source else { return }
+        transformAndSpeak(source, mode: mode)
     }
 
     private func mouseReleased(isGesture: Bool) {
@@ -513,6 +686,12 @@ final class DictationController {
     /// Shows ▶ for `offer`, fading after five seconds if it isn't pressed.
     private func offerReadAloud(_ offer: ReadAloudOffer) {
         readAloudOffer = offer
+        // A new selection invalidates everything derived from the old one.
+        transformCache = [:]
+        lengthConfirmed = false
+        readAloudRunID = nil
+        readAloudSource = nil
+        readAloudError = nil
         // A new offer appears where the last one was; a pointer left resting there from
         // before shouldn't pin it open, and SwiftUI won't report the exit of a view it
         // already replaced.
