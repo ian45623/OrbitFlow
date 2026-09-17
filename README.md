@@ -4,6 +4,24 @@ Push-to-talk dictation for macOS. Hold a key, talk, release — cleaned-up text 
 whatever text field has focus. A Wispr Flow-shaped app, built native and on-device by
 default — with one opt-in tier that isn't. See "AI rewrite" below.
 
+## Download
+
+[![Download Orbit Flow for Mac](https://img.shields.io/badge/Download_Orbit_Flow-for_Mac-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.zip)
+
+**[Click here to download the latest Orbit Flow](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.zip)**
+— needs macOS 26 on Apple silicon.
+
+1. Unzip it and drag **Orbit Flow.app** into Applications.
+2. Double-click it. macOS blocks the first launch because the app isn't notarized: go to
+   System Settings ▸ Privacy & Security and click **Open Anyway**.
+3. Grant **Accessibility** and **Microphone** when asked, then hold **Right ⌥** and talk.
+
+After that, Settings ▸ Updates keeps it current — turn on **Install updates automatically**
+and you won't need this page again. Every build is listed under
+[Releases](https://github.com/ian45623/OrbitFlow/releases).
+
+---
+
 **Status:** working skeleton. Builds, launches, arms the hotkey, transcribes, injects.
 Branding and the LLM cleanup tier are the next passes.
 
