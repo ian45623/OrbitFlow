@@ -1,316 +1,147 @@
+<div align="center">
+
+<img src="Resources/AppIcon.iconset/icon_256x256@2x.png" width="128" alt="Orbit Flow icon">
+
 # Orbit Flow
 
-Push-to-talk dictation for macOS. Hold a key, talk, release — cleaned-up text lands in
-whatever text field has focus. A Wispr Flow-shaped app, built native and on-device by
-default — with one opt-in tier that isn't. See "AI rewrite" below.
+**Talk instead of type, in any app on your Mac.**<br>
+Free, private dictation that runs entirely on your Mac. No account, no subscription, no cloud.
 
-## Download
+<a href="https://github.com/ian45623/OrbitFlow/releases/latest"><img src="https://img.shields.io/badge/Download_for_Mac-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="44"></a>
 
-[![Download Orbit Flow for Mac](https://img.shields.io/badge/Download_Orbit_Flow-for_Mac-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.dmg)
+[![Latest release](https://img.shields.io/github/v/release/ian45623/OrbitFlow?label=latest&color=0A84FF)](https://github.com/ian45623/OrbitFlow/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ian45623/OrbitFlow/total?color=0A84FF)](https://github.com/ian45623/OrbitFlow/releases)
+![macOS 26+](https://img.shields.io/badge/macOS-26%2B-lightgrey)
+![Apple silicon](https://img.shields.io/badge/Apple_silicon-M1%2B-lightgrey)
 
-**[Click here to download the latest Orbit Flow](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.dmg)**
-— needs macOS 26 on Apple silicon.
+<sub>On the release page, download <b>Orbit.Flow.dmg</b> under <i>Assets</i>.</sub>
 
-1. Open the downloaded **Orbit Flow.dmg**. A window shows the app and your Applications
-   folder — drag Orbit Flow onto Applications.
-2. Open Orbit Flow from Applications. macOS blocks the first launch because the app isn't notarized: go to
-   System Settings ▸ Privacy & Security and click **Open Anyway**.
-3. Grant **Accessibility** and **Microphone** when asked, then hold **Right ⌥** and talk.
-
-After that, Settings ▸ Updates keeps it current — turn on **Install updates automatically**
-and you won't need this page again. Every build is listed under
-[Releases](https://github.com/ian45623/OrbitFlow/releases).
+</div>
 
 ---
 
-**Status:** working skeleton. Builds, launches, arms the hotkey, transcribes, injects.
-Branding and the LLM cleanup tier are the next passes.
+Hold a key, say what you want to write, let go. Clean, punctuated text appears wherever
+your cursor is: Mail, Slack, Notes, your code editor, a browser form. The whole thing runs
+on your Mac. Your voice is never uploaded, and once the speech model has downloaded it
+works with Wi-Fi off.
 
----
+## Features
 
-## Coexisting with another dictation app
+- **Works in every app.** If you can type in it, you can dictate into it.
+- **Private by design.** Speech is turned into text on your Mac by Apple's built-in speech
+  engine, or by NVIDIA's Parakeet model on the Neural Engine. Audio never leaves the Mac.
+- **Hold to talk, or tap to go hands-free.** Hold the key for a quick sentence. Tap it once
+  to keep listening, tap again to stop. You choose the key, and you can set more than one.
+- **Clean text, not a raw transcript.** Punctuation and capitals go in, filler words like
+  "um" and "uh" come out, and saying "new line" or "new paragraph" does what you'd expect.
+- **Your words, spelled right.** Add names, product terms and jargon to the Dictionary, or
+  fix a word it keeps getting wrong (`cloud code -> Claude Code`). The Dictionary is a plain
+  text file you can edit by hand.
+- **History.** Every dictation is saved, so nothing you said is lost if the paste lands in
+  the wrong place. Open any entry to copy it, rewrite it or hear it read back.
+- **Read aloud.** Highlight text in any app and a small pill offers to read it to you. You
+  can have it read as written, or ask for a summary, the gist, bullet points or a simpler
+  explanation first. Off by default.
+- **Optional AI rewrite.** Turn a rambling voice note into a clear message: Faithful,
+  Casual, Professional or Problem-solver. Use Apple Intelligence on your Mac, or bring your
+  own key for Anthropic, OpenAI, OpenRouter, Gemini or DeepSeek. Off by default.
+- **Stays out of your way.** A small pill at the bottom of the screen shows it's listening,
+  and it never steals focus from the app you're typing in.
+- **Updates itself.** Settings ▸ Updates can install new versions automatically.
 
-This app is built to run alongside other dictation tools without colliding with them, which
-is not automatic on macOS and is worth understanding before changing anything:
+## Install
 
-- **Bundle ID `ai.pivotstudio.orbitflow`** — TCC keys Accessibility and Microphone
-  grants to the bundle ID, so granting or revoking a permission here has no effect on any
-  other app, and vice versa.
-- **Executable `OrbitFlow`** — distinct enough that `pkill -x OrbitFlow` cannot
-  match a differently-named binary. The `Makefile` only ever targets `$(EXEC)`.
-- **Hotkey is configurable** (Right ⌥ / fn / Right ⌘) precisely because another tool may
-  already own the key you'd reach for first. The event tap inspects only its own keycode
-  and passes everything else through untouched.
+1. **[Download the latest release](https://github.com/ian45623/OrbitFlow/releases/latest)**
+   and grab **Orbit.Flow.dmg** from the *Assets* list.
+2. Open the disk image and drag **Orbit Flow** onto **Applications**.
+3. Open Orbit Flow from Applications. The app isn't notarized yet, so macOS blocks the first
+   launch. Go to **System Settings ▸ Privacy & Security** and click **Open Anyway**.
+4. Allow **Accessibility** (so it can see your shortcut key and type for you) and
+   **Microphone** when asked.
+5. Hold **Right ⌥ (Option)** and start talking.
 
-If you run more than one dictation app, give each a different push-to-talk key. Two apps on
-the same key both record, and whichever injects text will fight the other.
+Needs macOS 26 or later on an Apple silicon Mac (M1 or newer).
 
----
+## Privacy
 
-## Quick start
+Out of the box, nothing leaves your Mac. There's no account, no analytics and no server.
 
-```bash
-make install     # builds, bundles, signs, copies to /Applications, launches
-```
-
-Then grant two permissions — neither is optional, and neither can be requested silently:
-
-| Permission | Where | Needed for |
-|---|---|---|
-| **Accessibility** | System Settings ▸ Privacy & Security ▸ Accessibility | The `CGEventTap` that sees the hotkey, and the AX text insert |
-| **Microphone** | Prompted on first dictation | Audio capture |
-
-Restart Orbit Flow after granting Accessibility. Then hold **Right ⌥** and talk.
-
-### Installing on another Mac
-
-```bash
-make dist        # release build → ~/Desktop/Orbit Flow.zip
-```
-
-Or `make dmg` for the drag-to-Applications installer the Download button hands out.
-Send the zip over (AirDrop, USB, cloud drive). The other Mac needs macOS 26 and Apple
-silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click. The app
-isn't notarized, so macOS blocks it the first time. Go to System Settings ▸ Privacy &
-Security, click **Open Anyway**, then grant the same two permissions as above.
-
-### Shipping updates
-
-```bash
-make release     # commit + push first; publishes GitHub release build-<commit count>
-```
-
-Every installed copy picks it up from Settings ▸ Updates ▸ **Check for updates**. It
-downloads the zip, quits, swaps itself, and reopens. No Gatekeeper prompt, and permissions
-carry over.
-
-### Why grants survive rebuilds here
-
-TCC stores a *code-signing requirement* per entry, not just a path. An ad-hoc signature
-changes on every build, so the rebuilt binary stops satisfying the stored requirement —
-and the symptom is nasty: the Accessibility toggle still **shows as on** while the app is
-reported untrusted, and flipping it changes nothing because the stale row is the problem.
-
-The `Makefile` therefore signs with a stable Developer ID (auto-detected via
-`security find-identity`, falling back to ad-hoc). Verified: rebuild + reinstall keeps both
-grants with no re-prompt.
-
-If a grant ever does get wedged, reset that one row and re-add — never toggle:
-
-```bash
-tccutil reset Accessibility ai.pivotstudio.orbitflow
-tccutil reset Microphone   ai.pivotstudio.orbitflow
-```
-
-Always pass the bundle ID. A bare `tccutil reset Accessibility` wipes **every** app on the
-machine. Then quit System Settings entirely (⌘Q) before reopening — that pane caches its
-list and will otherwise show the row you just deleted.
-
-> **Keep the build out of iCloud.** `~/Desktop` and `~/Documents` are file-provider synced
-> on this machine; the sync engine can materialize/dematerialize files inside an `.app` and
-> corrupt its signature. `make install` puts the running copy in `/Applications`.
-
-Other targets: `make app` (bundle only), `make run` (run in place), `make clean`.
-
----
-
-## Architecture
-
-```
- hold key ─► HotkeyMonitor ──► DictationController ◄── Settings
-                                │
-                     ┌──────────┼──────────┐
-                     ▼          ▼          ▼
-              AudioCapture  HUDPanel   TranscriptionEngine
-                     │                      │
-                (AudioChunk) ──ordered──► AppleSpeechEngine
-                                            │
-                                       (transcript)
-                                            ▼
-                                      TextFormatter
-                                            ▼
-                                      TextInjector ─► focused app
-```
-
-### Decisions worth knowing
-
-**The HUD must never take focus.** `HUDPanel` is a `.nonactivatingPanel` with
-`canBecomeKey == false`. This is the load-bearing detail of the whole app: if the overlay
-took key status, the user's text field would lose focus and there'd be nothing left to
-inject into. Everything else is replaceable; this isn't.
-
-**The hotkey needs a `CGEventTap`, not `NSEvent`.** `fn` and left/right modifier
-discrimination don't surface through `NSEvent.addGlobalMonitorForEvents` or the Carbon
-hotkey API. A session event tap is the only way to see them — which is why Accessibility
-permission is a hard requirement rather than a nicety.
-
-**Audio ordering is explicit.** `AudioCapture` yields into an `AsyncStream` drained by a
-single task. Spawning a `Task` per buffer would be simpler and would silently corrupt the
-transcript, because unstructured tasks have no ordering guarantee.
-
-**Buffers are copied, never borrowed.** `AVAudioEngine` recycles the buffer it hands to a
-tap the instant the callback returns. `AudioChunk`'s `@unchecked Sendable` is only sound
-because `AudioCapture` always allocates fresh storage before handing off.
-
-**Two swappable seams.** `TranscriptionEngine` and `TextFormatter` are protocols so the
-two components most likely to change can change without touching anything else.
-
-### Layout
-
-```
-Sources/OrbitFlow/
-├── OrbitFlowApp.swift              @main, AppDelegate, MenuBarExtra
-├── Core/
-│   ├── DictationController.swift   state machine, wires everything
-│   ├── HotkeyMonitor.swift         CGEventTap on .flagsChanged
-│   ├── AudioCapture.swift          AVAudioEngine tap + format conversion + RMS
-│   └── TextInjector.swift          AX insert, pasteboard+⌘V fallback
-├── Transcription/
-│   ├── TranscriptionEngine.swift   protocol + AudioChunk
-│   └── AppleSpeechEngine.swift     SpeechAnalyzer / SpeechTranscriber
-├── Formatting/
-│   └── TextFormatter.swift         protocol + RuleBasedFormatter
-├── UI/
-│   ├── HUDPanel.swift              non-activating floating panel
-│   └── HUDView.swift               waveform + live transcript, Brand palette
-└── Support/
-    ├── Settings.swift, Permissions.swift, Log.swift
-```
-
----
-
-## Speech engine
-
-Default is Apple's **`SpeechAnalyzer` / `SpeechTranscriber`**, new in macOS 26: no
-dependency, no bundled model, no cloud path, real streaming with `.volatileResults` so
-text appears while you're still talking. The OS downloads and manages model assets, so the
-first run for a locale may pause on `AssetInstallationRequest`.
-
-The intended upgrade is **Parakeet v3** via FluidAudio (CoreML on the Neural Engine) —
-measurably better English WER, ~110× realtime, ~66 MB resident. Implementing
-`TranscriptionEngine` is the entire cost of switching; `DictationController` doesn't
-change.
-
-| | Apple SpeechTranscriber | Parakeet v3 (FluidAudio) | Whisper large-v3 (WhisperKit) |
-|---|---|---|---|
-| Dependency | none | SwiftPM | SwiftPM |
-| Model download | OS-managed | ~600 MB | ~1.5 GB |
-| English accuracy | good | best | good |
-| Languages | many | 25 | 99 |
-| Latency | low | ~80 ms | 200–500 ms |
-
----
+| | |
+|---|---|
+| **Your audio** | Never sent anywhere, under any setting. |
+| **Your text** | Stays on the Mac, unless you turn on AI rewrite or a read-aloud mode with a cloud provider. Then only the text is sent, to the provider you picked, using your own key. |
+| **Your API keys** | Kept in the macOS Keychain. Not synced to iCloud. |
+| **Your history** | Stored locally in your user folder. |
 
 ## AI rewrite
 
-**Off by default.** Everything else in this app runs on your Mac. AI rewrite is the one
-feature that doesn't have to, which is why it's opt-in, and why even once it's on, the
-default mode — Faithful — changes nothing about your wording until you pick a mode that's
-allowed to.
-
-**AI rewrite** in Settings ▸ Cleanup is a three-way setting, not a toggle:
+AI rewrite lives in **Settings ▸ Cleanup** and has three settings:
 
 | | |
 |---|---|
-| **Off** | No AI rewrite anywhere. Dictation pastes rule- or on-device-cleaned text. |
-| **On demand** | Dictation pastes cleaned text, untouched by AI. You rewrite by selecting text and asking for it — see "Rewriting text you didn't dictate" below. |
-| **Always** | Every dictation is rewritten before it pastes, on top of everything On demand gives you. |
+| **Off** | No AI anywhere. The default. |
+| **On demand** | Dictation pastes as usual. You ask for a rewrite when you want one. |
+| **Always** | Every dictation is rewritten before it pastes. |
 
-Under **Always**, the transcript of each dictation is sent to a provider you choose —
-Anthropic, OpenAI, OpenRouter, Gemini, or DeepSeek — using **your own API key**, and comes
-back rewritten. Switch to a provider with no saved key while Always is selected and the
-setting drops back to On demand rather than silently failing on every utterance.
+With **On demand**, select text in any app, right-click, and open **Services**:
 
-| | |
-|---|---|
-| **What is sent** | The transcript text and the mode instruction. Nothing else. |
-| **What is never sent** | Audio. Your recordings never leave the Mac under any setting. |
-| **Where the key lives** | The macOS Keychain, not `UserDefaults`, and not synced to iCloud. One key per provider. |
-| **Who is billed** | You are, by your provider, at their rates. |
-| **If it fails** | The rule-based cleanup runs instead and your text still pastes. A network problem never costs you an utterance. |
+- **Rewrite with Orbit Flow** rewrites the selection in place using your current mode.
+- **Orbit Flow ▸ Faithful / Casual / Professional / Problem-solver** does the same with the
+  mode you pick right then.
+- **Orbit Flow ▸ Open in Orbit Flow** opens the text in the app. There you can write your
+  own instructions, switch between cloud and on-device, and compare versions side by side.
 
-### Modes
+Give the one you use most a shortcut in **System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸
+Services** and a rewrite is one keystroke away. You can also switch modes from the menu bar.
 
-| Mode | What it does |
-|---|---|
-| **Faithful** | Cleans up what you said and leaves your wording alone. The default. |
-| **Casual** | Relaxed and conversational, the way you'd write to a colleague you know well. |
-| **Professional** | Clear business English. No slang, no filler, no padding. |
-| **Problem-solver** | Professional and polite, framed as a proposal. Won't invent a solution you didn't say. |
+**Things worth knowing**
 
-Switch modes from the menu bar without opening Settings.
+- If a rewrite fails during dictation, you still get your text with the basic cleanup. A
+  network hiccup never costs you what you said.
+- If a rewrite of selected text fails, your selection is left exactly as it was. The result
+  is also copied to the clipboard, because some places (web pages, PDFs) can't be edited.
+- **Faithful** checks that the answer contains only words you said. Dictate "what's the
+  capital of France" and you get the question typed out, not "Paris". The other modes are
+  meant to reword things, so they can't be checked the same way. If you dictate a lot of
+  questions, stick with Faithful.
 
-**One limitation worth knowing.** Every mode's prompt tells the model that a dictated
-question stays a question rather than something to answer. In Faithful mode there's also a
-programmatic check that refuses any output containing words you didn't say — which is what
-catches the classic failure where you dictate "what's the capital of France" and get "The
-capital of France is Paris." typed into your document. That check **cannot** apply to the
-rewriting modes, because introducing words is exactly what they're for. If you dictate
-questions a lot, Faithful is the safer mode.
+## Troubleshooting
 
-### Rewriting text you didn't dictate
+**macOS says the app can't be opened.** Go to System Settings ▸ Privacy & Security and click
+**Open Anyway**. You only need to do this once.
 
-Set **AI rewrite** to **On demand** and dictation pastes clean, untouched text —
-the rewrite waits until you ask for it.
+**Holding the key does nothing.** Check that Orbit Flow is switched on under System
+Settings ▸ Privacy & Security ▸ Accessibility, then quit and reopen the app.
 
-Select text in any app and right-click ▸ **Services**:
+**Accessibility shows as on, but it still doesn't work.** Reset just Orbit Flow's
+permission, then allow it again:
 
-- **Rewrite with Orbit Flow** — rewrites the selection in place, using the mode
-  set in Settings or the menu bar.
-- **Orbit Flow ▸ Faithful / Casual / Professional / Problem-solver** — the same,
-  with the mode chosen at the moment you use it.
-- **Orbit Flow ▸ Open in Orbit Flow** — brings the selection into the app, where
-  you get every mode, your own written instructions, a cloud/on-device switch,
-  and every version kept side by side.
+```bash
+tccutil reset Accessibility ai.pivotstudio.orbitflow
+```
 
-Services rows sit one level down under **Services ▸** — macOS doesn't let any app
-add a top-level right-click item. Give the one you use a keyboard shortcut in
-**System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Services** and it becomes a
-single keystroke.
+Always include `ai.pivotstudio.orbitflow`. Without it, the command resets the permission for
+every app on your Mac.
 
-If a rewrite fails, your selection is left exactly as it was. That's the opposite
-of what dictation does, on purpose: a spoken sentence you'd lose is worth
-degrading to a rule-based cleanup, but text already on your screen is not worth
-overwriting with a worse version of itself because a request timed out.
+**Another dictation app uses the same key.** Pick a different key in Orbit Flow's Settings.
+Two apps on the same key will both record and both paste.
 
-The result is always copied to your clipboard as well, because a selection in a
-web page or a PDF can't be replaced and macOS gives no way to know that in
-advance.
+## Build from source
 
----
+```bash
+git clone https://github.com/ian45623/OrbitFlow.git
+cd OrbitFlow
+make install     # build, sign, copy to /Applications and launch
+```
 
-## Not built yet
+You need the Xcode Command Line Tools (`xcode-select --install`). See
+[docs/development.md](docs/development.md) for architecture and build notes, and
+[docs/distribution.md](docs/distribution.md) for packaging and releases.
 
-1. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
-   Needs AX read of `kAXSelectedTextAttribute` plus an LLM round-trip.
-2. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
-   supports this through `AnalysisContext` / `SFCustomLanguageModelData`.
-3. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
-   real palette, HUD motion design, onboarding.
-4. **Onboarding.** A first-run window that walks through both permissions instead of
-   relying on the menu's "Grant…" items.
-5. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
-   distributable.
+## Contributing
 
----
+Bug reports and ideas are welcome in
+[Issues](https://github.com/ian45623/OrbitFlow/issues). Pull requests are welcome too. For
+anything big, open an issue first so we can talk it through.
 
-## Verified
-
-Driven with a synthetic Right ⌥ hold (`scratchpad/ptt/ptt2.swift` posts `flagsChanged`
-events) and confirmed via `/usr/bin/log show --predicate 'subsystem ==
-"ai.pivotstudio.orbitflow"'`:
-
-- Builds clean under Swift 6 strict concurrency.
-- Signs with Developer ID; grants survive rebuild + reinstall.
-- Launches as an accessory app, no Dock icon, menu bar item present.
-- Event tap arms on grant without a restart (the poller catches it).
-- Full state machine: `starting → listening → finishing → idle`, no errors.
-- `SpeechAnalyzer` starts; models already installed, no download stall.
-- Audio capture runs and converts native 48 kHz → 16 kHz for the engine.
-- HUD renders bottom-center at `{{790, 96}, {340, 76}}` without taking focus.
-- Silence produces an empty transcript and injects nothing.
-
-**Not yet verified:** speech → transcript → cleanup → injection. Synthetic key events
-can't produce audio, so this needs a human to hold the key and talk.
-
-> `log` is shadowed in this shell — use `/usr/bin/log` explicitly or it returns nothing.
+If Orbit Flow saves you some typing, a ⭐ helps other people find it.
