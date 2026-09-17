@@ -114,6 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        Updater.shared.startPeriodicChecks { [controller] in
+            controller.state != .idle || controller.isReadAloudShowing
+        }
+
         observeState()
         Log.app.info("Orbit Flow ready — hold \(ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)) to dictate")
     }

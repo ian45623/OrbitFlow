@@ -117,6 +117,12 @@ final class Settings {
         didSet { defaults.set(compareMode, forKey: Keys.compareMode) }
     }
 
+    /// Install a newer build as soon as the periodic check finds one and nothing is in
+    /// flight. Off by default: quitting and relaunching is something to opt into.
+    var autoUpdate: Bool {
+        didSet { defaults.set(autoUpdate, forKey: Keys.autoUpdate) }
+    }
+
     /// Run the cleanup pass before injecting. Off = raw engine output.
     var cleanupEnabled: Bool {
         didSet { defaults.set(cleanupEnabled, forKey: Keys.cleanupEnabled) }
@@ -253,6 +259,7 @@ final class Settings {
         static let aiModel = "aiModel"
         static let rewriteMode = "rewriteMode"
         static let compareMode = "compareMode"
+        static let autoUpdate = "autoUpdate"
         static let hudSize = "hudSize"
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
@@ -313,6 +320,7 @@ final class Settings {
             rawValue: defaults.string(forKey: Keys.rewriteMode) ?? ""
         ) ?? .faithful
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
+        autoUpdate = defaults.object(forKey: Keys.autoUpdate) as? Bool ?? false
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
         readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false
