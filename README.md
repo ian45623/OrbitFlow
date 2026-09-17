@@ -6,13 +6,14 @@ default — with one opt-in tier that isn't. See "AI rewrite" below.
 
 ## Download
 
-[![Download Orbit Flow for Mac](https://img.shields.io/badge/Download_Orbit_Flow-for_Mac-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.zip)
+[![Download Orbit Flow for Mac](https://img.shields.io/badge/Download_Orbit_Flow-for_Mac-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.dmg)
 
-**[Click here to download the latest Orbit Flow](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.zip)**
+**[Click here to download the latest Orbit Flow](https://github.com/ian45623/OrbitFlow/releases/latest/download/Orbit.Flow.dmg)**
 — needs macOS 26 on Apple silicon.
 
-1. Unzip it and drag **Orbit Flow.app** into Applications.
-2. Double-click it. macOS blocks the first launch because the app isn't notarized: go to
+1. Open the downloaded **Orbit Flow.dmg**. A window shows the app and your Applications
+   folder — drag Orbit Flow onto Applications.
+2. Open Orbit Flow from Applications. macOS blocks the first launch because the app isn't notarized: go to
    System Settings ▸ Privacy & Security and click **Open Anyway**.
 3. Grant **Accessibility** and **Microphone** when asked, then hold **Right ⌥** and talk.
 
@@ -67,6 +68,7 @@ Restart Orbit Flow after granting Accessibility. Then hold **Right ⌥** and tal
 make dist        # release build → ~/Desktop/Orbit Flow.zip
 ```
 
+Or `make dmg` for the drag-to-Applications installer the Download button hands out.
 Send the zip over (AirDrop, USB, cloud drive). The other Mac needs macOS 26 and Apple
 silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click. The app
 isn't notarized, so macOS blocks it the first time. Go to System Settings ▸ Privacy &
