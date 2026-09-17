@@ -119,11 +119,15 @@ private struct DictionaryRow: View {
 
             Spacer()
 
-            if isHovering {
+            // Kept in the layout and faded rather than inserted on hover, so the row
+            // holds one height and the list doesn't shift under the pointer.
+            HStack(spacing: DS.Space.base) {
                 ActionButton(title: "Edit", kind: .quiet, action: onEdit)
                 ActionButton(title: entry.isEnabled ? "Turn off" : "Turn on", kind: .quiet, action: onToggle)
                 ActionButton(title: "Delete", kind: .quiet, action: onDelete)
             }
+            .opacity(isHovering ? 1 : 0)
+            .allowsHitTesting(isHovering)
         }
         .opacity(entry.isEnabled ? 1 : 0.45)
         .padding(.horizontal, DS.Space.wide)

@@ -1,6 +1,16 @@
 EXEC     := OrbitFlow
 CONFIG   := debug
 
+## Command Line Tools 27 default to the macOS 27 SDK, whose SwiftUI `@State` is a macro
+## implemented by a SwiftUIMacros plugin that ships only with full Xcode — so every build
+## fails with "plugin for module 'SwiftUIMacros' not found". Pin the 26.5 SDK while it's
+## installed. An SDKROOT from the environment still wins.
+# ponytail: hardcoded SDK path; drop once Xcode is installed or the CLT ships the plugin.
+SDK_26 := /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+ifneq ($(wildcard $(SDK_26)),)
+export SDKROOT ?= $(SDK_26)
+endif
+
 ## Build products live OUTSIDE this directory, for the same reason the .app does.
 ##
 ## A file-provider synced folder (iCloud Desktop/Documents, Dropbox) mutates files inside
@@ -26,8 +36,12 @@ CONTENTS := $(BUNDLE)/Contents
 ## changes on every build — makes the user re-grant after every `make`. Signing with a
 ## stable Developer ID keeps the identity constant and the grant sticky. Falls back to
 ## ad-hoc ("-") on a machine without the cert.
+##
+## `make cert` creates the self-signed fallback once; without either, we sign ad-hoc, whose
+## cdhash changes on every build.
+CERT_CN := Orbit Flow Local
 SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null \
-             | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+             | grep -E "Developer ID Application|$(CERT_CN)" | head -1 | sed -E 's/.*"(.*)".*/\1/')
 ifeq ($(strip $(SIGN_ID)),)
 SIGN_ID := -
 endif
@@ -47,7 +61,10 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon
+.PHONY: all build test app run install clean icon cert dist release
+
+## Monotonic with no manual bumping. Uncommitted changes don't move it — `release` refuses them.
+BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
 all: app
 
@@ -69,11 +86,14 @@ build:
 ## skipped automatically when the CLT directory isn't there.
 CLT_FRAMEWORKS := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
 CLT_LIB        := /Library/Developer/CommandLineTools/Library/Developer/usr/lib
+## With the 26.5 SDK pinned above, `@Test` can't find its TestingMacros plugin either.
+CLT_TESTING_PLUGINS := /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 TESTFLAGS      := $(if $(wildcard $(CLT_FRAMEWORKS)),\
                     -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) \
                     -Xlinker -F -Xlinker $(CLT_FRAMEWORKS) \
                     -Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) \
-                    -Xlinker -rpath -Xlinker $(CLT_LIB),)
+                    -Xlinker -rpath -Xlinker $(CLT_LIB) \
+                    -Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS),)
 
 test:
 	swift test --scratch-path "$(SCRATCH)" $(TESTFLAGS)
@@ -92,6 +112,8 @@ app: build
 	@mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	@cp $(BUILD) "$(CONTENTS)/MacOS/$(EXEC)"
 	@cp Resources/Info.plist "$(CONTENTS)/Info.plist"
+	@# The commit count is the build number the in-app updater compares against.
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" "$(CONTENTS)/Info.plist"
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$(CONTENTS)/Resources/"; fi
 	@printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	@# Belt and braces: the staging dir isn't synced, but the copied binary can still carry
@@ -105,10 +127,12 @@ app: build
 		"$(BUNDLE)"
 	@echo "built $(BUNDLE)  [signed: $(SIGN_ID)]"
 
-## Only ever targets the OrbitFlow executable — never the separate `orbitflow` app.
-run: app
-	@pkill -x $(EXEC) 2>/dev/null || true
-	@open "$(BUNDLE)"
+## Runs the *installed* copy, never the staging bundle.
+##
+## A TCC grant and a login item both point at a path, and $(STAGE) sits under
+## ~/Library/Caches — which macOS purges, and which this Makefile rewrites on every build.
+## Launching from there is why permission prompts come back.
+run: install
 
 ## Ad-hoc signatures change on every rebuild, which resets the Accessibility grant.
 ## Installing keeps the path stable and makes re-granting a one-click fix.
@@ -126,7 +150,62 @@ install: app
 	@rm -rf "$(INSTALL_DIR)/$(APPNAME)"
 	@cp -R "$(BUNDLE)" "$(INSTALL_DIR)/$(APPNAME)"
 	@open "$(INSTALL_DIR)/$(APPNAME)"
+	@# pbs caches the Services database and does not notice a changed Info.plist on its
+	@# own, so every build that touches NSServices would otherwise show stale rows.
+	@/System/Library/CoreServices/pbs -flush 2>/dev/null || true
 	@echo "installed to $(INSTALL_DIR)/$(APPNAME)"
+
+## One-time: a stable self-signed code-signing identity, so the Accessibility grant sticks.
+##
+## Ad-hoc signing has no certificate, so TCC has nothing durable to pin the grant to and
+## re-asks after builds. A self-signed cert gives the bundle a designated requirement that
+## survives every rebuild. Expect two macOS prompts for your login password — import, then
+## trust. Delete it with:
+##   security delete-certificate -c "$(CERT_CN)" ~/Library/Keychains/login.keychain-db
+##
+## The PKCS#12 password is deliberately not empty: `security import` rejects an
+## empty-password bundle with "MAC verification failed during PKCS12 import (wrong
+## password?)". The value itself is irrelevant — the .p12 lives in $$d for two lines and
+## the trap deletes it on exit.
+cert:
+	@set -e; \
+	if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(CERT_CN)"; then \
+	  echo "already have \"$(CERT_CN)\" — nothing to do"; exit 0; \
+	fi; \
+	d=$$(mktemp -d); trap 'rm -rf "'"$$d"'"' EXIT; \
+	openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+	  -keyout "$$d/k.pem" -out "$$d/c.pem" -subj "/CN=$(CERT_CN)" \
+	  -addext "basicConstraints=critical,CA:false" \
+	  -addext "keyUsage=critical,digitalSignature" \
+	  -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null; \
+	openssl pkcs12 -export -out "$$d/i.p12" -inkey "$$d/k.pem" -in "$$d/c.pem" \
+	  -passout pass:orbitflow; \
+	security import "$$d/i.p12" -k "$(HOME)/Library/Keychains/login.keychain-db" \
+	  -P orbitflow -A; \
+	security add-trusted-cert -r trustRoot -p codeSign \
+	  -k "$(HOME)/Library/Keychains/login.keychain-db" "$$d/c.pem"; \
+	echo "created \"$(CERT_CN)\" — now run: make install"
+
+## A release build zipped for copying to another Mac. `ditto` rather than `zip` so the
+## code signature and bundle metadata survive. Without a Developer ID + notarization the
+## other Mac's Gatekeeper blocks the first launch — see README "Installing on another Mac".
+DIST := $(HOME)/Desktop/Orbit Flow.zip
+
+dist:
+	@$(MAKE) app CONFIG=release
+	@rm -f "$(DIST)"
+	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
+	@echo "wrote $(DIST)"
+
+## Publishes the zip as GitHub release `build-<N>`; every installed copy's
+## Settings ▸ Check for updates picks it up. Committed, pushed code only, so the number on
+## a release always names real source.
+release:
+	@test -z "$$(git status --porcelain)" || { echo "commit your changes first"; exit 1; }
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse @{u} 2>/dev/null)" || { echo "push first"; exit 1; }
+	@$(MAKE) dist
+	@gh release create "build-$(BUILD_NUMBER)" "$(DIST)" --target "$$(git rev-parse HEAD)" \
+		--title "Build $(BUILD_NUMBER)" --notes "$$(git log -1 --pretty=%s)"
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"

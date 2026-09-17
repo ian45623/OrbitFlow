@@ -14,7 +14,7 @@ final class HUDPanel: NSPanel {
     /// exactly to the panel has nowhere to put its shadow: the blur is cut off flush at the
     /// edge and the corners read as hard squares instead of fading out. The margin has to
     /// clear `DS.Shadow.hud`'s radius *plus* its downward offset.
-    static let shadowMargin: CGFloat = 28
+    static let shadowMargin: CGFloat = 12
 
     /// The window size for a given pill: the capsule plus margin on all sides.
     static func panelSize(for hud: HUDSize) -> CGSize {
@@ -24,7 +24,29 @@ final class HUDPanel: NSPanel {
         )
     }
 
+    /// The read-aloud capsule. One size, always — it never resizes under the pointer.
+    ///
+    /// Far narrower than either dictation size, because read aloud has nothing long to
+    /// show: two short menus between two discs. A wider capsule would be mostly empty, and
+    /// this one appears unasked over whatever you are trying to read.
+    ///
+    /// Everything that appears here is sized to fit, rather than the capsule growing to fit
+    /// it. That is why the working state is a spinner on the disc instead of a sentence,
+    /// and why failures read "Bad key" rather than naming what to do about it — a capsule
+    /// that jumps wider the moment something goes wrong draws the eye to the resize instead
+    /// of to the words.
+    static let readAloudPillSize = CGSize(width: 186, height: 30)
+
+    /// Smaller than Full's discs, in proportion to the shorter capsule.
+    static let readAloudControlSize: CGFloat = 20
+
+    /// Read in `present()` to decide whether this pill needs to be full-sized for a
+    /// notice or read aloud. Stored rather than reaching for a shared singleton so the
+    /// panel doesn't need to know how the controller it was handed relates to anything else.
+    private let controller: DictationController
+
     init(controller: DictationController) {
+        self.controller = controller
         super.init(
             contentRect: NSRect(origin: .zero, size: Self.panelSize(for: Settings.shared.hudSize)),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -37,7 +59,8 @@ final class HUDPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
-        // The pill carries a discard and a confirm button, so it has to receive clicks.
+        // The pill carries buttons — discard and confirm, or ✕ and ▶/■ while reading aloud —
+        // so it has to receive clicks.
         // This is safe only because `canBecomeKey` is false: a non-activating panel takes
         // the click without activating the app, so the text field you were typing in keeps
         // focus and `TextInjector` still has somewhere to insert.
@@ -65,25 +88,60 @@ final class HUDPanel: NSPanel {
         }
         let visible = screen.visibleFrame
         let size = frame.size
-        // Offset by the margin so the *capsule* sits 96pt up, not the invisible panel around
-        // it — otherwise changing the pill size would appear to move the pill.
+        // `visibleFrame` already stops above the Dock, so this is the gap between the two:
+        // close enough to read as part of the Dock's furniture rather than floating in the
+        // middle of whatever you're working in, far enough not to touch it or catch its
+        // magnification. Offset by the margin so the *capsule* sits at that gap, not the
+        // invisible panel around it — otherwise changing the pill size would move the pill.
         setFrameOrigin(
             NSPoint(
                 x: visible.midX - size.width / 2,
-                y: visible.minY + 96 - Self.shadowMargin
+                y: visible.minY + Self.dockGap - Self.shadowMargin
             )
         )
     }
 
+    /// Space left between the Dock (or the screen's bottom edge) and the pill.
+    ///
+    /// Enough to clear the Dock's own tooltips: hovering an icon raises its name into the
+    /// space just above the Dock, and at a smaller gap that label shows through from behind
+    /// the pill. Everything else wants this as small as possible — the pill belongs with the
+    /// Dock, not in the middle of what you're reading.
+    static let dockGap: CGFloat = 40
+
     func present() {
+        // Read aloud sizes itself: narrow for the two menus, Full's width for a message.
+        // Everything else is the pill-size setting, or Full when a notice overrides it.
+        let size: CGSize
+        if controller.showsReadAloudButton {
+            size = CGSize(
+                width: Self.readAloudPillSize.width + Self.shadowMargin * 2,
+                height: Self.readAloudPillSize.height + Self.shadowMargin * 2
+            )
+        } else {
+            size = Self.panelSize(for: controller.needsFullHUD ? .full : Settings.shared.hudSize)
+        }
+
         // Every active state change (starting → listening → finishing) calls this. Without
         // the early exit the panel would reset to alpha 0 and re-fade on each one, which
-        // reads as a flicker mid-utterance.
-        guard !isVisible || alphaValue < 1 else { return }
+        // reads as a flicker mid-utterance. But read aloud and dictation can hand the pill
+        // to each other while it's already up — a Compact dictation starting while History
+        // speech is showing, or the talk key stopping speech and starting a Compact
+        // dictation in the same pass — so a visible pill whose size no longer matches what
+        // it needs to show still has to resize, just without the fade: only its *arrival*
+        // gets one.
+        guard !isVisible || alphaValue < 1 else {
+            if frame.size != size {
+                setContentSize(size)
+                reposition()
+            }
+            return
+        }
 
         // The pill size is a setting, and this is the only moment it can change without the
-        // user seeing it resize under them.
-        setContentSize(Self.panelSize(for: Settings.shared.hudSize))
+        // user seeing it resize under them (besides the same-pill resize above). A notice
+        // overrides the setting — see `DictationController.needsFullHUD`.
+        setContentSize(size)
         reposition()
         alphaValue = 0
         orderFrontRegardless()

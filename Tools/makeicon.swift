@@ -5,9 +5,10 @@ import Foundation
 // Renders AppIcon.icns from code — no design tool, no binary asset to keep in sync with
 // the HUD palette. Run: swift Tools/makeicon.swift
 
-// Matches `Brand` in HUDView.swift. Change both together.
-let accent = NSColor(srgbRed: 0.42, green: 0.55, blue: 1.00, alpha: 1)
-let accentWarm = NSColor(srgbRed: 0.76, green: 0.47, blue: 1.00, alpha: 1)
+// The graphite face of the design system: DS.Color.canvas / surface, dark appearance.
+// A dark tile, white waveform — same mark as the HUD pill. Change together.
+let tileDark = NSColor(srgbRed: 0.055, green: 0.063, blue: 0.078, alpha: 1)   // 0x0E1014
+let tileLight = NSColor(srgbRed: 0.125, green: 0.137, blue: 0.157, alpha: 1)  // 0x202328
 
 /// Relative bar heights, center-weighted so the mark reads as a voice waveform rather
 /// than a bar chart.
@@ -40,7 +41,7 @@ func drawIcon(size: CGFloat) -> NSImage {
         color: NSColor.black.withAlphaComponent(0.30).cgColor
     )
     ctx.addPath(squircle)
-    ctx.setFillColor(accent.cgColor)
+    ctx.setFillColor(tileDark.cgColor)
     ctx.fillPath()
     ctx.restoreGState()
 
@@ -50,7 +51,7 @@ func drawIcon(size: CGFloat) -> NSImage {
     ctx.clip()
     let gradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(),
-        colors: [accent.cgColor, accentWarm.cgColor] as CFArray,
+        colors: [tileLight.cgColor, tileDark.cgColor] as CFArray,
         locations: [0, 1]
     )!
     ctx.drawLinearGradient(
@@ -60,11 +61,12 @@ func drawIcon(size: CGFloat) -> NSImage {
         options: []
     )
 
-    // Soft top highlight so the tile reads as glass rather than flat fill.
+    // Barely-there top highlight so the tile has a top edge against a dark Dock
+    // without reading as a gloss.
     let highlight = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(),
         colors: [
-            NSColor.white.withAlphaComponent(0.28).cgColor,
+            NSColor.white.withAlphaComponent(0.07).cgColor,
             NSColor.white.withAlphaComponent(0.0).cgColor,
         ] as CFArray,
         locations: [0, 1]

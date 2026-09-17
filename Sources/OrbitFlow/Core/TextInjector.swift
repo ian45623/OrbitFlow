@@ -113,13 +113,7 @@ enum TextInjector {
 
     private static func insertViaPasteboard(_ text: String) {
         let pasteboard = NSPasteboard.general
-        let saved = pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data] in
-            var copy: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) { copy[type] = data }
-            }
-            return copy
-        }
+        let saved = snapshot(of: pasteboard)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -128,7 +122,7 @@ enum TextInjector {
             // Give the target app a moment to observe the new pasteboard generation before
             // ⌘V arrives, or a fast paste can grab the *previous* contents.
             try? await Task.sleep(for: .milliseconds(40))
-            postCommandV()
+            postCommand(key: 9) // kVK_ANSI_V
             Log.inject.info("pasted (\(text.count) chars)")
 
             // The paste is asynchronous in the target app; restore only once it's had time
@@ -138,12 +132,24 @@ enum TextInjector {
         }
     }
 
-    private static func postCommandV() {
-        guard let source = CGEventSource(stateID: .privateState) else { return }
-        let vKey: CGKeyCode = 9 // kVK_ANSI_V
+    /// Everything on the pasteboard, every type of every item, so it can be put back exactly.
+    /// Shared with `SelectedText.copy`, which borrows the pasteboard the same way.
+    static func snapshot(of pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]]? {
+        pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data] in
+            var copy: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) { copy[type] = data }
+            }
+            return copy
+        }
+    }
 
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
+    /// Posts ⌘ plus `key` to whatever app has focus.
+    static func postCommand(key: CGKeyCode) {
+        guard let source = CGEventSource(stateID: .privateState) else { return }
+
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         else { return }
 
         // Set explicitly rather than inheriting live hardware modifier state — the user may
@@ -155,7 +161,7 @@ enum TextInjector {
         up.post(tap: .cghidEventTap)
     }
 
-    private static func restore(
+    static func restore(
         _ saved: [[NSPasteboard.PasteboardType: Data]]?,
         to pasteboard: NSPasteboard
     ) {

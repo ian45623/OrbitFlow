@@ -1,6 +1,7 @@
 import AVFoundation
 import FluidAudio
 import Foundation
+import Observation
 
 /// NVIDIA Parakeet TDT 0.6B, compiled to CoreML and run on the Neural Engine via FluidAudio.
 ///
@@ -108,16 +109,50 @@ actor ParakeetEngine: TranscriptionEngine {
 actor ParakeetModels {
     static let shared = ParakeetModels()
 
+    /// Where FluidAudio puts the models. One definition, because the check, the size
+    /// readout, and the delete all have to agree about which directory they mean.
+    nonisolated static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FluidAudio/Models/parakeet-tdt-0.6b-v3")
+    }
+
     /// Whether the models are already on disk, checked without loading them.
     ///
     /// `nonisolated` and filesystem-based on purpose: the menu needs this synchronously
     /// while drawing, and an in-memory "have I loaded yet" flag would wrongly report
     /// "not downloaded" on every fresh launch.
     nonisolated static var isDownloaded: Bool {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let encoder = support
-            .appendingPathComponent("FluidAudio/Models/parakeet-tdt-0.6b-v3/Encoder.mlmodelc")
-        return FileManager.default.fileExists(atPath: encoder.path)
+        FileManager.default.fileExists(atPath: directory.appendingPathComponent("Encoder.mlmodelc").path)
+    }
+
+    /// Bytes the models occupy, or nil if they aren't installed. Walked rather than
+    /// hardcoded — "470 MB" is this version's number, not every version's.
+    nonisolated static var sizeOnDisk: Int64? {
+        guard isDownloaded else { return nil }
+        guard let files = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey]
+        ) else { return nil }
+        var total: Int64 = 0
+        for case let url as URL in files {
+            total += Int64((try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
+                .totalFileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
+    /// Deletes the models and forgets the loaded copy.
+    ///
+    /// Both halves matter. Dropping only the files would leave `loaded` holding the
+    /// models in memory, so a "reinstall" would return them instantly and never touch
+    /// the network — a test of the download path that silently tests nothing.
+    func remove() throws {
+        loaded = nil
+        loadTask?.cancel()
+        loadTask = nil
+        if FileManager.default.fileExists(atPath: Self.directory.path) {
+            try FileManager.default.removeItem(at: Self.directory)
+        }
     }
 
     private var loaded: AsrManager?
@@ -138,11 +173,25 @@ actor ParakeetModels {
                 : "downloading models (~470 MB, one time)"
             Log.speech.info("Parakeet: \(stage, privacy: .public)")
             let started = Date()
-            let models = try await AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int8)
-            let manager = AsrManager(config: .default)
-            try await manager.loadModels(models)
-            Log.speech.info("Parakeet: ready in \(Date().timeIntervalSince(started), format: .fixed(precision: 1))s")
-            return manager
+            do {
+                let models = try await AsrModels.downloadAndLoad(
+                    version: .v3,
+                    encoderPrecision: .int8,
+                    // Reported wherever the user happens to be looking — Settings, the menu
+                    // bar — including when it's a first dictation that started the download.
+                    progressHandler: { progress in
+                        Task { @MainActor in ParakeetDownload.shared.report(progress) }
+                    }
+                )
+                let manager = AsrManager(config: .default)
+                try await manager.loadModels(models)
+                Log.speech.info("Parakeet: ready in \(Date().timeIntervalSince(started), format: .fixed(precision: 1))s")
+                await MainActor.run { ParakeetDownload.shared.markReady() }
+                return manager
+            } catch {
+                await MainActor.run { ParakeetDownload.shared.markFailed(error) }
+                throw error
+            }
         }
         loadTask = task
 
@@ -156,5 +205,78 @@ actor ParakeetModels {
             loadTask = nil
             throw error
         }
+    }
+}
+
+/// What the download is doing, for anything that wants to show it.
+///
+/// One observable rather than per-view state: the download can be started from Settings,
+/// from the menu bar, or by a dictation that just needs the models, and all three have to
+/// read the same truth. Previously each surface tracked its own flag and none of them
+/// could see a download the other had started.
+@MainActor
+@Observable
+final class ParakeetDownload {
+    static let shared = ParakeetDownload()
+
+    enum Phase: Equatable {
+        case missing
+        case working(label: String, fraction: Double)
+        case ready
+        case failed(String)
+    }
+
+    /// Seeded from disk, not from an in-memory flag — models downloaded in a previous
+    /// launch are still downloaded.
+    private(set) var phase: Phase = ParakeetModels.isDownloaded ? .ready : .missing
+
+    /// Read once per state change rather than per redraw — it's a walk over ~600 files.
+    private(set) var installedSize: Int64? = ParakeetModels.sizeOnDisk
+
+    var isWorking: Bool { if case .working = phase { true } else { false } }
+
+    /// Idempotent: `ParakeetModels` coalesces concurrent loads, so a second press just
+    /// joins the download already running.
+    func start() {
+        guard phase != .ready, !isWorking else { return }
+        phase = .working(label: "Starting", fraction: 0)
+        Task { _ = try? await ParakeetModels.shared.manager() }
+    }
+
+    fileprivate func report(_ progress: DownloadProgress) {
+        // A warm load from disk still emits compile progress. Once ready, stay ready —
+        // a progress bar reappearing on every launch would read as re-downloading.
+        guard phase != .ready else { return }
+        let label = switch progress.phase {
+        case .listing: "Preparing"
+        case .downloading: "Downloading"
+        case .compiling: "Optimizing for the Neural Engine"
+        }
+        phase = .working(label: label, fraction: progress.fractionCompleted)
+    }
+
+    /// Deletes the models so the download can be run again. Failure isn't given its own
+    /// error state — re-reading the disk keeps the card honest either way, and a delete
+    /// that failed leaves it saying "installed", which is exactly what's true.
+    func removeFromDisk() {
+        Task {
+            do {
+                try await ParakeetModels.shared.remove()
+            } catch {
+                Log.speech.error("Parakeet: couldn't delete models — \(error.localizedDescription)")
+            }
+            phase = ParakeetModels.isDownloaded ? .ready : .missing
+            installedSize = ParakeetModels.sizeOnDisk
+        }
+    }
+
+    fileprivate func markReady() {
+        phase = .ready
+        installedSize = ParakeetModels.sizeOnDisk
+    }
+
+    fileprivate func markFailed(_ error: Error) {
+        guard phase != .ready else { return }
+        phase = .failed(error.localizedDescription)
     }
 }
