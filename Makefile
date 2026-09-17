@@ -163,6 +163,10 @@ install: app
 ## trust. Delete it with:
 ##   security delete-certificate -c "$(CERT_CN)" ~/Library/Keychains/login.keychain-db
 ##
+## `-A` alone isn't enough: since Sierra a private key also carries a partition list, and
+## without `apple-tool:` on it codesign pops "codesign wants to access key" on every build.
+## `-name` gives the key a findable label for that step (it was "i.p12" otherwise).
+##
 ## The PKCS#12 password is deliberately not empty: `security import` rejects an
 ## empty-password bundle with "MAC verification failed during PKCS12 import (wrong
 ## password?)". The value itself is irrelevant — the .p12 lives in $$d for two lines and
@@ -179,9 +183,12 @@ cert:
 	  -addext "keyUsage=critical,digitalSignature" \
 	  -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null; \
 	openssl pkcs12 -export -out "$$d/i.p12" -inkey "$$d/k.pem" -in "$$d/c.pem" \
-	  -passout pass:orbitflow; \
+	  -name "$(CERT_CN)" -passout pass:orbitflow; \
 	security import "$$d/i.p12" -k "$(HOME)/Library/Keychains/login.keychain-db" \
 	  -P orbitflow -A; \
+	echo "enter your login password once so codesign can use the key without asking:"; \
+	security set-key-partition-list -S apple-tool:,apple: -s -l "$(CERT_CN)" \
+	  "$(HOME)/Library/Keychains/login.keychain-db" >/dev/null; \
 	security add-trusted-cert -r trustRoot -p codeSign \
 	  -k "$(HOME)/Library/Keychains/login.keychain-db" "$$d/c.pem"; \
 	echo "created \"$(CERT_CN)\" — now run: make install"
