@@ -215,6 +215,17 @@ struct SettingsPanel: View {
                 }
 
                 group("Updates") {
+                    Toggle(isOn: $settings.autoUpdate) {
+                        Text("Install updates automatically")
+                            .font(DS.Font.body)
+                            .foregroundStyle(DS.Color.ink)
+                    }
+                    .toggleStyle(.switch)
+                    note("Orbit Flow checks every few hours. With this on, it quits, updates, and "
+                        + "reopens by itself — never while you're dictating or listening.")
+
+                    Hairline()
+
                     note("Version \(Updater.currentVersion) (build \(Updater.currentBuild))")
                     updateRow
                 }

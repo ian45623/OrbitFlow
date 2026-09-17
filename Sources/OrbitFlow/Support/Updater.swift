@@ -40,24 +40,46 @@ final class Updater {
     }
 
     func check() {
+        Task { await refresh() }
+    }
+
+    /// Checks at launch and every few hours after. When `Settings.autoUpdate` is on, a found
+    /// build installs itself — but only once `isBusy` goes false, so a relaunch never lands
+    /// in the middle of a dictation or a passage being read aloud.
+    func startPeriodicChecks(isBusy: @escaping @MainActor () -> Bool) {
+        guard periodicChecks == nil else { return }
+        periodicChecks = Task {
+            while !Task.isCancelled {
+                await refresh()
+                while Settings.shared.autoUpdate, case .available = phase {
+                    if !isBusy() { install(); return }
+                    try? await Task.sleep(for: .seconds(60))
+                }
+                try? await Task.sleep(for: Self.checkInterval)
+            }
+        }
+    }
+
+    private var periodicChecks: Task<Void, Never>?
+    private static let checkInterval = Duration.seconds(6 * 60 * 60)
+
+    private func refresh() async {
         guard phase != .checking, phase != .installing else { return }
         phase = .checking
-        Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(from: Self.latestRelease)
-                // 404 is GitHub's answer for "no releases yet", not a failure worth alarming anyone.
-                if (response as? HTTPURLResponse)?.statusCode == 404 { phase = .upToDate; return }
-                let release = try JSONDecoder().decode(Release.self, from: data)
-                guard let build = Int(release.tag_name.replacing("build-", with: "")),
-                      let zip = release.assets.map(\.browser_download_url).first(where: { $0.pathExtension == "zip" })
-                else {
-                    phase = .failed("The latest release (\(release.tag_name)) has no build number or zip.")
-                    return
-                }
-                phase = build > Self.currentBuild ? .available(build: build, zip: zip) : .upToDate
-            } catch {
-                phase = .failed("Couldn't reach GitHub: \(error.localizedDescription)")
+        do {
+            let (data, response) = try await URLSession.shared.data(from: Self.latestRelease)
+            // 404 is GitHub's answer for "no releases yet", not a failure worth alarming anyone.
+            if (response as? HTTPURLResponse)?.statusCode == 404 { phase = .upToDate; return }
+            let release = try JSONDecoder().decode(Release.self, from: data)
+            guard let build = Int(release.tag_name.replacing("build-", with: "")),
+                  let zip = release.assets.map(\.browser_download_url).first(where: { $0.pathExtension == "zip" })
+            else {
+                phase = .failed("The latest release (\(release.tag_name)) has no build number or zip.")
+                return
             }
+            phase = build > Self.currentBuild ? .available(build: build, zip: zip) : .upToDate
+        } catch {
+            phase = .failed("Couldn't reach GitHub: \(error.localizedDescription)")
         }
     }
 

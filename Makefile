@@ -61,7 +61,7 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon cert dist release
+.PHONY: all build test app run install clean icon cert dist dmg release
 
 ## Monotonic with no manual bumping. Uncommitted changes don't move it — `release` refuses them.
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
@@ -163,6 +163,10 @@ install: app
 ## trust. Delete it with:
 ##   security delete-certificate -c "$(CERT_CN)" ~/Library/Keychains/login.keychain-db
 ##
+## `-A` alone isn't enough: since Sierra a private key also carries a partition list, and
+## without `apple-tool:` on it codesign pops "codesign wants to access key" on every build.
+## `-name` gives the key a findable label for that step (it was "i.p12" otherwise).
+##
 ## The PKCS#12 password is deliberately not empty: `security import` rejects an
 ## empty-password bundle with "MAC verification failed during PKCS12 import (wrong
 ## password?)". The value itself is irrelevant — the .p12 lives in $$d for two lines and
@@ -179,9 +183,12 @@ cert:
 	  -addext "keyUsage=critical,digitalSignature" \
 	  -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null; \
 	openssl pkcs12 -export -out "$$d/i.p12" -inkey "$$d/k.pem" -in "$$d/c.pem" \
-	  -passout pass:orbitflow; \
+	  -name "$(CERT_CN)" -passout pass:orbitflow; \
 	security import "$$d/i.p12" -k "$(HOME)/Library/Keychains/login.keychain-db" \
 	  -P orbitflow -A; \
+	echo "enter your login password once so codesign can use the key without asking:"; \
+	security set-key-partition-list -S apple-tool:,apple: -s -l "$(CERT_CN)" \
+	  "$(HOME)/Library/Keychains/login.keychain-db" >/dev/null; \
 	security add-trusted-cert -r trustRoot -p codeSign \
 	  -k "$(HOME)/Library/Keychains/login.keychain-db" "$$d/c.pem"; \
 	echo "created \"$(CERT_CN)\" — now run: make install"
@@ -197,14 +204,59 @@ dist:
 	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
 	@echo "wrote $(DIST)"
 
-## Publishes the zip as GitHub release `build-<N>`; every installed copy's
+## The download people click: a disk image that opens on the app, an Applications shortcut,
+## and an arrow between them. A browser can't download an .app on its own — it's a folder —
+## so it has to come wrapped in something, and this is the wrapper Mac users expect.
+##
+## Finder stores the window layout in the image's .DS_Store, and AppleScript is the only
+## supported way to write one. The first run asks to let this terminal control Finder; if
+## that's refused the image still works, it just opens as a plain window.
+DMG      := $(HOME)/Desktop/Orbit Flow.dmg
+DMG_VOL  := Install Orbit Flow
+
+dmg:
+	@$(MAKE) app CONFIG=release
+	@set -e; d="$(STAGE)/dmg"; rw="$(STAGE)/rw.dmg"; \
+	rm -rf "$$d" "$$rw" "$(DMG)"; mkdir -p "$$d/.background"; \
+	cp -R "$(BUNDLE)" "$$d/"; ln -s /Applications "$$d/Applications"; \
+	cp Resources/DMGBackground.tiff "$$d/.background/background.tiff"; \
+	hdiutil detach "/Volumes/$(DMG_VOL)" -quiet 2>/dev/null || true; \
+	hdiutil create -quiet -volname "$(DMG_VOL)" -srcfolder "$$d" -fs HFS+ -format UDRW "$$rw"; \
+	hdiutil attach -quiet -noautoopen "$$rw"; \
+	osascript \
+	  -e 'tell application "Finder" to tell disk "$(DMG_VOL)"' \
+	  -e 'open' \
+	  -e 'set current view of container window to icon view' \
+	  -e 'set toolbar visible of container window to false' \
+	  -e 'set statusbar visible of container window to false' \
+	  -e 'set bounds of container window to {200, 120, 800, 522}' \
+	  -e 'set opts to icon view options of container window' \
+	  -e 'set arrangement of opts to not arranged' \
+	  -e 'set icon size of opts to 128' \
+	  -e 'set text size of opts to 13' \
+	  -e 'set background picture of opts to file ".background:background.tiff"' \
+	  -e 'set position of item "$(APPNAME)" to {160, 190}' \
+	  -e 'set position of item "Applications" to {440, 190}' \
+	  -e 'update without registering applications' \
+	  -e 'delay 1' \
+	  -e 'close' \
+	  -e 'end tell' \
+	  || echo "Finder layout skipped — the image will open as a plain window"; \
+	sync; hdiutil detach -quiet "/Volumes/$(DMG_VOL)" || hdiutil detach -force -quiet "/Volumes/$(DMG_VOL)"; \
+	hdiutil convert -quiet "$$rw" -format UDZO -imagekey zlib-level=9 -o "$(DMG)"; \
+	rm -rf "$$d" "$$rw"
+	@echo "wrote $(DMG)"
+
+## Publishes the zip and the dmg as GitHub release `build-<N>`; every installed copy's
 ## Settings ▸ Check for updates picks it up. Committed, pushed code only, so the number on
 ## a release always names real source.
 release:
 	@test -z "$$(git status --porcelain)" || { echo "commit your changes first"; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse @{u} 2>/dev/null)" || { echo "push first"; exit 1; }
 	@$(MAKE) dist
-	@gh release create "build-$(BUILD_NUMBER)" "$(DIST)" --target "$$(git rev-parse HEAD)" \
+	@$(MAKE) dmg
+	@# The zip is what the in-app updater looks for; the dmg is what people download.
+	@gh release create "build-$(BUILD_NUMBER)" "$(DIST)" "$(DMG)" --target "$$(git rev-parse HEAD)" \
 		--title "Build $(BUILD_NUMBER)" --notes "$$(git log -1 --pretty=%s)"
 
 clean:
