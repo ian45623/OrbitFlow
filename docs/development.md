@@ -27,9 +27,10 @@ make dist        # release build → ~/Desktop/Orbit Flow.zip
 
 Or `make dmg` for the drag-to-Applications installer the Download button hands out.
 Send the zip over (AirDrop, USB, cloud drive). The other Mac needs macOS 26 and Apple
-silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click. The app
-isn't notarized, so macOS blocks it the first time. Go to System Settings ▸ Privacy &
-Security, click **Open Anyway**, then grant the same two permissions as above.
+silicon. There: unzip, drag **Orbit Flow.app** to Applications, and double-click, then grant
+the same two permissions as above. With a Developer ID certificate in your keychain the build
+is notarized and opens normally. Without one, macOS blocks the first launch: System Settings ▸
+Privacy & Security ▸ **Open Anyway**. See [distribution.md](distribution.md).
 
 ### Shipping updates
 

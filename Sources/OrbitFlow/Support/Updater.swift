@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import Security
 
 /// Self-update from GitHub Releases.
 ///
@@ -10,8 +11,9 @@ import Observation
 /// swaps the bundle in place, and relaunches.
 ///
 /// The download comes from URLSession, which doesn't add a quarantine flag, so Gatekeeper
-/// doesn't block the relaunch. The ad-hoc signature's requirement is pinned to the bundle ID
-/// (see the Makefile), so the Accessibility grant also carries over to the new build.
+/// doesn't block the relaunch. Releases are Developer ID signed and notarized, so the
+/// signature's requirement stays the same from build to build and the Accessibility grant
+/// carries over.
 @MainActor
 @Observable
 final class Updater {
@@ -105,15 +107,21 @@ final class Updater {
         let (downloaded, _) = try await URLSession.shared.download(from: zip)
         let work = FileManager.default.temporaryDirectory.appending(path: "OrbitFlowUpdate-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        try run("/usr/bin/ditto", "-x", "-k", downloaded.path, work.path)
+        try run("/usr/bin/ditto", ["-x", "-k", downloaded.path, work.path])
 
         guard let newApp = try FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)
             .first(where: { $0.pathExtension == "app" })
         else { throw UpdateError("The download didn't contain an app.") }
 
-        // Trust boundary: refuse anything that isn't intact or isn't this app. Ad-hoc signing
-        // can't prove who built it — only that it wasn't damaged and claims to be Orbit Flow.
-        try run("/usr/bin/codesign", "--verify", "--deep", "--strict", newApp.path)
+        // Trust boundary: refuse anything that isn't intact or isn't this app. A Developer ID
+        // copy only accepts an update signed by the same team; an ad-hoc copy can't prove who
+        // built anything, so it checks only that the download is undamaged — which is also
+        // what lets an ad-hoc install move onto the first Developer ID release.
+        var verify = ["--verify", "--deep", "--strict"]
+        if let team = Self.teamIdentifier {
+            verify.append("-R=" + Self.developerIDRequirement(team: team))
+        }
+        try run("/usr/bin/codesign", verify + [newApp.path])
         guard Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier else {
             throw UpdateError("The download isn't Orbit Flow.")
         }
@@ -132,7 +140,27 @@ final class Updater {
         NSApp.terminate(nil)
     }
 
-    private func run(_ tool: String, _ arguments: String...) throws {
+    /// The team that signed this running copy, or nil for an ad-hoc or self-signed build.
+    private static let teamIdentifier: String? = {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess
+        else { return nil }
+        return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+    }()
+
+    /// Apple's standard Developer ID requirement, narrowed to one team: issued by Apple's
+    /// Developer ID intermediate, a Developer ID Application leaf, and this team's OU.
+    private static func developerIDRequirement(team: String) -> String {
+        #"anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"#
+            + #" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"#
+            + #" and certificate leaf[subject.OU] = "\#(team)""#
+    }
+
+    private func run(_ tool: String, _ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(filePath: tool)
         process.arguments = arguments

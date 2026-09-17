@@ -219,7 +219,9 @@ stalled pass must never cost the user an utterance they already spoke.
    `docs/superpowers/plans/`.
 2. **Command Mode** — select text, hold a second key, "make this more formal."
 3. **Onboarding** — a first-run window walking through the permissions.
-4. **Notarization.** The app is unsigned for distribution.
+4. **First notarized release.** `make release` signs with Developer ID, notarizes and
+   staples, and refuses without a Developer ID. A trial run passed Gatekeeper; no notarized
+   build has been published yet.
 
 ## What no amount of CI can verify
 
