@@ -38,13 +38,25 @@ CONTENTS := $(BUNDLE)/Contents
 ## ad-hoc ("-") on a machine without the cert.
 ##
 ## `make cert` creates the self-signed fallback once; without either, we sign ad-hoc, whose
-## cdhash changes on every build.
+## cdhash changes on every build. A Developer ID always wins over the self-signed cert —
+## one `grep -E "a|b"` would take whichever the keychain happens to list first.
 CERT_CN := Orbit Flow Local
-SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null \
-             | grep -E "Developer ID Application|$(CERT_CN)" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+SIGN_ID := $(shell ids=$$(security find-identity -v -p codesigning 2>/dev/null); \
+             echo "$$ids" | sed -nE 's/.*"(Developer ID Application: .*)".*/\1/p' | head -1 | grep . \
+             || echo "$$ids" | sed -nE 's/.*"($(CERT_CN))".*/\1/p' | head -1)
 ifeq ($(strip $(SIGN_ID)),)
 SIGN_ID := -
 endif
+
+## Only a Developer ID build can be notarized, and notarization is what lets a downloaded
+## copy open without "Apple could not verify…". Apple also requires a secure timestamp; it's
+## a round trip to Apple on every signing, so debug builds skip it and stay offline-friendly.
+DEVELOPER_ID := $(findstring Developer ID Application,$(SIGN_ID))
+TIMESTAMP    := $(if $(and $(DEVELOPER_ID),$(filter release,$(CONFIG))),--timestamp,--timestamp=none)
+
+## The keychain profile `xcrun notarytool store-credentials` saved the Apple ID login under.
+## See docs/distribution.md ▸ Developer ID: setup.
+NOTARY_PROFILE ?= orbitflow
 
 BUNDLE_ID := ai.pivotstudio.orbitflow
 
@@ -61,7 +73,7 @@ ifeq ($(SIGN_ID),-)
 SIGN_REQ := -r='designated => identifier "$(BUNDLE_ID)"'
 endif
 
-.PHONY: all build test app run install clean icon cert dist dmg release
+.PHONY: all build test app run install clean icon cert dist dmg release notarize zip dmg-image verify-release
 
 ## Monotonic with no manual bumping. Uncommitted changes don't move it — `release` refuses them.
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
@@ -123,7 +135,7 @@ app: build
 		--identifier "$(BUNDLE_ID)" \
 		--entitlements Resources/$(EXEC).entitlements \
 		--options runtime \
-		--timestamp=none \
+		$(TIMESTAMP) \
 		"$(BUNDLE)"
 	@echo "built $(BUNDLE)  [signed: $(SIGN_ID)]"
 
@@ -194,31 +206,82 @@ cert:
 	echo "created \"$(CERT_CN)\" — now run: make install"
 
 ## A release build zipped for copying to another Mac. `ditto` rather than `zip` so the
-## code signature and bundle metadata survive. Without a Developer ID + notarization the
-## other Mac's Gatekeeper blocks the first launch — see README "Installing on another Mac".
+## code signature and bundle metadata survive. The in-app updater downloads this zip.
 DIST := $(HOME)/Desktop/Orbit Flow.zip
 
 dist:
 	@$(MAKE) app CONFIG=release
-	@rm -f "$(DIST)"
-	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
-	@echo "wrote $(DIST)"
+	@$(MAKE) notarize
+	@$(MAKE) zip
 
 ## The download people click: a disk image that opens on the app, an Applications shortcut,
 ## and an arrow between them. A browser can't download an .app on its own — it's a folder —
 ## so it has to come wrapped in something, and this is the wrapper Mac users expect.
-##
-## Finder stores the window layout in the image's .DS_Store, and AppleScript is the only
-## supported way to write one. The first run asks to let this terminal control Finder; if
-## that's refused the image still works, it just opens as a plain window.
 DMG      := $(HOME)/Desktop/Orbit Flow.dmg
 DMG_VOL  := Install Orbit Flow
 
 dmg:
 	@$(MAKE) app CONFIG=release
+	@$(MAKE) notarize
+	@$(MAKE) dmg-image
+
+## Sends the staged bundle to Apple, waits for the verdict, and staples the ticket onto the
+## app so it opens without a network round trip. Without a Developer ID it warns and does
+## nothing — `make dist` still works for copying to your own Macs, and `release` refuses.
+##
+## Everything downstream (zip, dmg) must be built from this stapled bundle. Rebuilding the
+## app afterwards changes its signature and throws the ticket away, which is why `zip` and
+## `dmg-image` package $(BUNDLE) as-is instead of depending on `app`.
+notarize:
+	@test -d "$(BUNDLE)" || { echo "no bundle at $(BUNDLE) — run: make app CONFIG=release"; exit 1; }
+	@if [ -z "$(DEVELOPER_ID)" ]; then \
+	  echo "NOT NOTARIZED: no Developer ID Application certificate in the keychain."; \
+	  echo "  macOS will block the first launch on other Macs. See docs/distribution.md."; \
+	else \
+	  set -e; z="$(STAGE)/notarize.zip"; rm -f "$$z"; \
+	  ditto -c -k --keepParent "$(BUNDLE)" "$$z"; \
+	  $(call notarize_file,$$z); \
+	  rm -f "$$z"; \
+	  xcrun stapler staple -q "$(BUNDLE)"; \
+	  echo "notarized and stapled $(BUNDLE)"; \
+	fi
+
+## Submits one file and fails loudly with Apple's own log if it isn't accepted. `--wait`
+## alone isn't enough: notarytool can exit 0 on an "Invalid" verdict, so read the status.
+define notarize_file
+xcrun notarytool history --keychain-profile "$(NOTARY_PROFILE)" >/dev/null 2>&1 || { \
+  echo "no notarization credentials under profile \"$(NOTARY_PROFILE)\" — run:"; \
+  echo "  xcrun notarytool store-credentials $(NOTARY_PROFILE) --apple-id <email> --team-id <TEAM ID>"; \
+  exit 1; }; \
+echo "submitting $$(basename "$(1)") to Apple — this usually takes a few minutes…"; \
+out="$(STAGE)/notary.json"; \
+xcrun notarytool submit "$(1)" --keychain-profile "$(NOTARY_PROFILE)" --wait --output-format json > "$$out" || true; \
+status=$$(plutil -extract status raw -o - "$$out" 2>/dev/null || echo "no response"); \
+if [ "$$status" != "Accepted" ]; then \
+  echo "notarization failed: $$status"; cat "$$out"; echo; \
+  id=$$(plutil -extract id raw -o - "$$out" 2>/dev/null) && \
+    xcrun notarytool log "$$id" --keychain-profile "$(NOTARY_PROFILE)"; \
+  exit 1; \
+fi
+endef
+
+zip:
+	@test -d "$(BUNDLE)" || { echo "no bundle at $(BUNDLE) — run: make dist"; exit 1; }
+	@rm -f "$(DIST)"
+	@ditto -c -k --keepParent "$(BUNDLE)" "$(DIST)"
+	@echo "wrote $(DIST)"
+
+## Finder stores the window layout in the image's .DS_Store, and AppleScript is the only
+## supported way to write one. The first run asks to let this terminal control Finder; if
+## that's refused the image still works, it just opens as a plain window.
+##
+## The image is signed and notarized in its own right. The app inside is already stapled,
+## but Gatekeeper checks the image first when someone double-clicks the download.
+dmg-image:
+	@test -d "$(BUNDLE)" || { echo "no bundle at $(BUNDLE) — run: make dmg"; exit 1; }
 	@set -e; d="$(STAGE)/dmg"; rw="$(STAGE)/rw.dmg"; \
 	rm -rf "$$d" "$$rw" "$(DMG)"; mkdir -p "$$d/.background"; \
-	cp -R "$(BUNDLE)" "$$d/"; ln -s /Applications "$$d/Applications"; \
+	ditto "$(BUNDLE)" "$$d/$(APPNAME)"; ln -s /Applications "$$d/Applications"; \
 	cp Resources/DMGBackground.tiff "$$d/.background/background.tiff"; \
 	hdiutil detach "/Volumes/$(DMG_VOL)" -quiet 2>/dev/null || true; \
 	hdiutil create -quiet -volname "$(DMG_VOL)" -srcfolder "$$d" -fs HFS+ -format UDRW "$$rw"; \
@@ -245,16 +308,41 @@ dmg:
 	sync; hdiutil detach -quiet "/Volumes/$(DMG_VOL)" || hdiutil detach -force -quiet "/Volumes/$(DMG_VOL)"; \
 	hdiutil convert -quiet "$$rw" -format UDZO -imagekey zlib-level=9 -o "$(DMG)"; \
 	rm -rf "$$d" "$$rw"
+	@if [ -n "$(DEVELOPER_ID)" ]; then \
+	  set -e; \
+	  codesign --force --sign "$(SIGN_ID)" --timestamp "$(DMG)"; \
+	  $(call notarize_file,$(DMG)); \
+	  xcrun stapler staple -q "$(DMG)"; \
+	  echo "notarized and stapled $(DMG)"; \
+	fi
 	@echo "wrote $(DMG)"
+
+## The same checks Gatekeeper runs on a downloaded copy. `spctl` must say
+## "source=Notarized Developer ID"; anything else means people get the warning dialog.
+verify-release:
+	@set -e; \
+	codesign --verify --deep --strict "$(BUNDLE)"; \
+	spctl --assess --type execute -vv "$(BUNDLE)" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID"; \
+	xcrun stapler validate -q "$(BUNDLE)"; \
+	spctl --assess --type open --context context:primary-signature -vv "$(DMG)" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID"; \
+	xcrun stapler validate -q "$(DMG)"; \
+	echo "release artifacts pass Gatekeeper"
 
 ## Publishes the zip and the dmg as GitHub release `build-<N>`; every installed copy's
 ## Settings ▸ Check for updates picks it up. Committed, pushed code only, so the number on
-## a release always names real source.
+## a release always names real source. Notarized only: a release is what strangers download,
+## and an unnotarized one greets them with "Apple could not verify…".
+##
+## The app is built once and both artifacts come from that one stapled bundle.
 release:
 	@test -z "$$(git status --porcelain)" || { echo "commit your changes first"; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse @{u} 2>/dev/null)" || { echo "push first"; exit 1; }
-	@$(MAKE) dist
-	@$(MAKE) dmg
+	@test -n "$(DEVELOPER_ID)" || { echo "releases must be notarized: no Developer ID Application certificate in the keychain (see docs/distribution.md)"; exit 1; }
+	@$(MAKE) app CONFIG=release
+	@$(MAKE) notarize
+	@$(MAKE) zip
+	@$(MAKE) dmg-image
+	@$(MAKE) verify-release
 	@# The zip is what the in-app updater looks for; the dmg is what people download.
 	@gh release create "build-$(BUILD_NUMBER)" "$(DIST)" "$(DMG)" --target "$$(git rev-parse HEAD)" \
 		--title "Build $(BUILD_NUMBER)" --notes "$$(git log -1 --pretty=%s)"

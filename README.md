@@ -54,8 +54,8 @@ works with Wi-Fi off.
 1. **[Download the latest release](https://github.com/ian45623/OrbitFlow/releases/latest)**
    and grab **Orbit.Flow.dmg** from the *Assets* list.
 2. Open the disk image and drag **Orbit Flow** onto **Applications**.
-3. Open Orbit Flow from Applications. The app isn't notarized yet, so macOS blocks the first
-   launch. Go to **System Settings ▸ Privacy & Security** and click **Open Anyway**.
+3. Open Orbit Flow from Applications. macOS asks once whether you want to open an app you
+   downloaded. Click **Open**.
 4. Allow **Accessibility** (so it can see your shortcut key and type for you) and
    **Microphone** when asked.
 5. Hold **Right ⌥ (Option)** and start talking.
@@ -107,8 +107,13 @@ Services** and a rewrite is one keystroke away. You can also switch modes from t
 
 ## Troubleshooting
 
-**macOS says the app can't be opened.** Go to System Settings ▸ Privacy & Security and click
-**Open Anyway**. You only need to do this once.
+**macOS says "Apple could not verify" the app.** You have a build from before releases were
+notarized. Download the latest release and replace it. Or, to keep the one you have: System
+Settings ▸ Privacy & Security ▸ **Open Anyway**.
+
+**After updating, the shortcut key stopped working.** The first notarized build is signed
+differently, so macOS may ask for Accessibility once more. Switch Orbit Flow on again under
+System Settings ▸ Privacy & Security ▸ Accessibility.
 
 **Holding the key does nothing.** Check that Orbit Flow is switched on under System
 Settings ▸ Privacy & Security ▸ Accessibility, then quit and reopen the app.

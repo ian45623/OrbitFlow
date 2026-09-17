@@ -9,8 +9,8 @@ notarize it with a Developer ID.
 |---|---|
 | `make dist` — release build zipped to `~/Desktop/Orbit Flow.zip` | Done |
 | In-app **Settings ▸ Updates ▸ Check for updates** | Done |
-| `make release` — publishes the zip as GitHub release `build-<N>` | Written, never run |
-| Developer ID signing + notarization | **Not started — waiting on the setup below** |
+| `make release` — notarized zip + dmg as GitHub release `build-<N>` | Written, never run |
+| Developer ID signing + notarization (Makefile, updater Team ID check) | Done — trial run notarized and passed Gatekeeper; first real release pending |
 
 ## Picking this up on a new computer
 
@@ -32,31 +32,46 @@ full Xcode or point `SDKROOT` at a 26.x SDK you do have
 - Builds in release mode and assembles `Orbit Flow.app` in `~/Library/Caches/OrbitFlowBuild`.
 - Stamps `CFBundleVersion` with the git commit count (`git rev-list --count HEAD`), so build
   numbers go up with no manual bumping.
-- Signs the app: Developer ID if one is in the keychain, otherwise ad-hoc. Ad-hoc signing pins
-  the designated requirement to the bundle ID, so the Accessibility grant survives rebuilds.
-- Zips with `ditto` (not `zip`), so the signature survives.
+- Signs the app: a Developer ID if one is in the keychain (always preferred), then the
+  self-signed `Orbit Flow Local` from `make cert`, otherwise ad-hoc. Ad-hoc signing pins the
+  designated requirement to the bundle ID, so the Accessibility grant survives rebuilds.
+- With a Developer ID, `make notarize` submits the app to Apple, waits, and staples the ticket
+  onto the bundle. On rejection it prints Apple's log and stops. Without one it warns and
+  carries on, so `make dist` still works for your own Macs.
+- Zips the stapled bundle with `ditto` (not `zip`), so the signature and ticket survive.
+- `make dmg` builds the disk image from the same stapled bundle, then signs, notarizes and
+  staples the image too.
 
-The target Mac needs macOS 26+ and Apple silicon. While the app is ad-hoc signed, the first
-launch is blocked: System Settings ▸ Privacy & Security ▸ **Open Anyway**.
+**Don't rebuild between notarizing and packaging.** A rebuild re-signs the app and discards
+the ticket. `zip` and `dmg-image` package the staged bundle as it is for this reason.
+
+The target Mac needs macOS 26+ and Apple silicon. A notarized download opens with macOS's
+ordinary "downloaded from the Internet" prompt. An ad-hoc one is blocked on first launch:
+System Settings ▸ Privacy & Security ▸ **Open Anyway**.
 
 ### Updates — `make release` and the Settings button
 
-- `make release` refuses uncommitted changes or unpushed commits, runs `make dist`, then runs
-  `gh release create build-<N>` with the zip attached. It needs `gh auth login`.
+- `make release` refuses uncommitted changes, unpushed commits, or a keychain with no
+  Developer ID. It builds once, notarizes, packages the zip and dmg, and runs
+  `make verify-release` (`spctl` must report `source=Notarized Developer ID` for both, and
+  both tickets must validate). Only then does it run `gh release create build-<N>`. It needs
+  `gh auth login`.
 - The app (`Sources/OrbitFlow/Support/Updater.swift`) reads
   `api.github.com/repos/ian45623/OrbitFlow/releases/latest`. It compares the tag's number
   with its own `CFBundleVersion`. A 404 means there are no releases yet, which it shows as
   "up to date".
 - Install downloads the zip and unpacks it with `ditto`. It then runs
-  `codesign --verify --deep --strict` and checks that the bundle ID matches. A detached
+  `codesign --verify --deep --strict` and checks that the bundle ID matches. A copy that is
+  itself Developer ID signed also requires the download to be signed by **the same team**.
+  It reads its own Team ID at runtime, so nothing is hardcoded. A detached
   `/bin/sh` waits for the app to quit, swaps the bundle in place, and reopens it.
 - URLSession downloads carry no quarantine flag, so the swapped-in app launches without a
   Gatekeeper prompt.
 - If the app's folder isn't writable, the updater says to move the app to Applications.
 
-**Known gap:** ad-hoc signing only proves the download is intact and claims to be Orbit Flow,
-not who built it. Anyone who can publish releases on the repo can push an update. Developer
-ID closes this (see below).
+**Known gap, closes itself:** an ad-hoc copy can only check that the download is intact and
+claims to be Orbit Flow, not who built it. That's also what lets it move onto the first
+Developer ID release. From then on, the team check applies.
 
 **One-time step:** any Mac with a build from before the Updates section existed needs one
 manual install of a newer zip. After that, updates come through the button.
@@ -96,21 +111,17 @@ Export, `.p12`) and import it there.
 The 10-character code at developer.apple.com ▸ Account ▸ Membership details. It isn't
 secret, so it can live in the Makefile.
 
-## Developer ID: remaining code changes
+## Developer ID: first release checklist
 
-These are ready to make once the setup above is done:
-
-1. **Makefile `app`:** use `--timestamp` instead of `--timestamp=none` when `SIGN_ID` is a
-   Developer ID. Notarization rejects builds without a secure timestamp. Keep
-   `--options runtime`, which it also requires.
-2. **Makefile `dist`:** after zipping, run
-   `xcrun notarytool submit "$(DIST)" --keychain-profile orbitflow --wait`, then
-   `xcrun stapler staple "$(BUNDLE)"`, then zip again so the shipped app carries the
-   notarization ticket.
-3. **Updater:** add a Team ID check to the verify step, so only apps signed by this team
-   install:
-   `codesign --verify --deep --strict -R='anchor apple generic and certificate leaf[subject.OU] = "<TEAM ID>"'`.
-4. **README / this doc:** drop the "Open Anyway" instructions once builds are notarized.
+1. Finish the setup above. Check that `security find-identity -v -p codesigning` lists
+   `Developer ID Application: …` and that
+   `xcrun notarytool history --keychain-profile orbitflow` runs without an error.
+2. Commit, push, then `make release`. Notarization usually takes a few minutes per file, and
+   it runs twice (app, then dmg).
+3. On another Mac, download the dmg **with a browser** so it's quarantined like a real user's
+   copy, then open it. You should get only the plain "downloaded from the Internet" prompt.
 
 **Side effect:** macOS ties the Accessibility grant to the signature. The first Developer ID
-build on each Mac asks for Accessibility once more; after that it stays.
+build on each Mac may ask for Accessibility once more; after that it stays.
+
+A different profile name works too: `make release NOTARY_PROFILE=<name>`.
