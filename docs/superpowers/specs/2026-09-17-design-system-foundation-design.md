@@ -15,7 +15,7 @@ one-accent rule, one step of depth, and no gradients all survive. What changes:
 - **A warmer, flatter paper palette**, and a dark face derived to match it.
 - **Metadata becomes instrumentation**: monospace, 10–11pt, uppercase, in a fixed slot.
 - **New radius and spacing scales.**
-- **Two new component roles**: the primary (filled) button and the step/status row.
+- **Two new components**: the step/status row and the fixed-width meta label.
 
 ## Typography
 
@@ -71,7 +71,7 @@ gap inside a status dot.
 
 ## Components
 
-`Components.swift` gains two roles and adjusts one:
+`Components.swift` gains two components:
 
 - **`ActionButton` already has the three kinds 1a shows** — filled `primary`, outlined
   `secondary`, text-only `quiet` — and needs only the new radius and type. No new kind.
