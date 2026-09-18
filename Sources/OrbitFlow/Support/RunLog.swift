@@ -186,7 +186,7 @@ enum RunLog {
     @discardableResult
     static func enforceRetention() -> Bool {
         let policy = Settings.shared.retentionPolicy
-        guard policy.limit != nil else { return false }
+        guard policy.rule != .keepEverything else { return false }
 
         let runs = load()
         let expired = History.expired(from: runs.map(\.historyItem), policy: policy)

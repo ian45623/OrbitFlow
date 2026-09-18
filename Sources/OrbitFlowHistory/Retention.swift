@@ -1,41 +1,50 @@
 import Foundation
 
-/// How much history is kept automatically.
+/// What history is trimmed down to, automatically.
+///
+/// One rule at a time, as a sum type rather than a pair of optional numbers: a count and a
+/// window that are both set have no agreed meaning, and the type that can't express the
+/// disagreement is cheaper than the code that would have to resolve it.
+public enum RetentionRule: Sendable, Equatable {
+    /// Keep the lot. Nothing is ever deleted without being asked for.
+    case keepEverything
+    /// Keep this many dictations, newest first.
+    case newest(Int)
+    /// Keep dictations recorded within this many days.
+    case within(days: Int)
+
+    /// The stops the age slider settles on. Roughly doubling, so eight of them cover a
+    /// week to two years without a list you have to aim at.
+    public static let dayPresets = [7, 14, 30, 60, 90, 180, 365, 730]
+
+    /// How a window is written on the slider's readout.
+    public static func dayLabel(_ days: Int) -> String {
+        switch days {
+        case 365: "1 year"
+        case 730: "2 years"
+        default: "\(days) days"
+        }
+    }
+}
+
+/// A rule plus the one exemption to it.
 public struct RetentionPolicy: Sendable, Equatable {
-    /// How many dictations to keep. `nil` — and anything below one — keeps everything.
-    public let limit: Int?
-    /// Pinned dictations are exempt: never deleted, and not counted against `limit`.
+    public let rule: RetentionRule
+    /// Pinned dictations are exempt: never deleted, and never counted against `rule`.
     public let keepsPinned: Bool
 
-    public init(limit: Int?, keepsPinned: Bool) {
-        self.limit = limit
+    public init(rule: RetentionRule, keepsPinned: Bool) {
+        self.rule = rule
         self.keepsPinned = keepsPinned
     }
 }
 
 extension History {
-    /// Which dictations have fallen past the limit. The newest survive.
-    ///
-    /// A limit below one means "keep everything", not "delete everything" — the settings
-    /// panel spells `off` as zero, and the reading that loses the user's history on an
-    /// off-by-one is the wrong one to take.
-    ///
-    /// With `keepsPinned`, pinned dictations are lifted out before anything is counted, so
-    /// they neither expire nor push an unpinned dictation over the edge. Fifty pinned under
-    /// a limit of 250 keeps 300, which is the only reading where pinning something can't
-    /// silently evict something else.
-    public static func expired(from items: [HistoryItem], policy: RetentionPolicy) -> Set<UUID> {
-        guard let limit = policy.limit, limit > 0 else { return [] }
-
-        let counted = policy.keepsPinned ? items.filter { !$0.isPinned } : items
-        guard counted.count > limit else { return [] }
-
-        // The id breaks ties: `sorted(by:)` is not a stable sort, and two dictations
-        // recorded in the same instant must not expire differently between two runs over
-        // the same history.
-        let newestFirst = counted.sorted {
-            $0.date == $1.date ? $0.id.uuidString > $1.id.uuidString : $0.date > $1.date
-        }
-        return Set(newestFirst.dropFirst(limit).map(\.id))
+    public static func expired(
+        from items: [HistoryItem],
+        policy: RetentionPolicy,
+        now: Date = Date()
+    ) -> Set<UUID> {
+        []
     }
 }

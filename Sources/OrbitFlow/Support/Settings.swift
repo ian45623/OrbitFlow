@@ -99,6 +99,24 @@ enum VoiceEngine: String, CaseIterable, Sendable {
     }
 }
 
+/// Which auto-delete rule the History & privacy section is running.
+///
+/// Off is a case here rather than a sentinel number, so "nothing is being deleted" is as
+/// explicit in storage as it is on screen.
+enum HistoryRetentionMode: String, CaseIterable, Sendable {
+    case off
+    case count
+    case age
+
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .count: "Keep the newest dictations"
+        case .age: "Keep recent dictations"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class Settings {
@@ -246,13 +264,23 @@ final class Settings {
         didSet { defaults.set(elevenLabsModel, forKey: Keys.elevenLabsModel) }
     }
 
-    /// How many dictations history keeps before the oldest are deleted automatically.
+    /// Which auto-delete rule runs, if any. Off by default — a feature that deletes the
+    /// user's own data without asking has to be opted into.
     ///
-    /// Zero — the default — is off, and keeps everything. A feature that deletes the
-    /// user's own data without asking has to be opted into, which is also why the panel
-    /// starts a newly-enabled slider at `defaultHistoryLimit` rather than at the floor.
+    /// The mode is stored apart from the two numbers it selects between, so switching
+    /// count → age → count comes back to the count you had rather than to a default.
+    var historyMode: HistoryRetentionMode {
+        didSet { defaults.set(historyMode.rawValue, forKey: Keys.historyMode) }
+    }
+
+    /// How many dictations `historyMode == .count` keeps.
     var historyLimit: Int {
         didSet { defaults.set(historyLimit, forKey: Keys.historyLimit) }
+    }
+
+    /// How many days `historyMode == .age` keeps. One of `RetentionRule.dayPresets`.
+    var historyDays: Int {
+        didSet { defaults.set(historyDays, forKey: Keys.historyDays) }
     }
 
     /// Pinned dictations are exempt from `historyLimit`: never auto-deleted, and never
@@ -261,13 +289,15 @@ final class Settings {
         didSet { defaults.set(historyKeepsPinned, forKey: Keys.historyKeepsPinned) }
     }
 
-    /// What `RunLog` enforces after each dictation. The zero-means-off translation lives
-    /// here so no caller has to remember it.
+    /// What `RunLog` enforces after each dictation. Assembling the rule here is what keeps
+    /// the two numbers from ever being live at once — only the mode decides which is read.
     var retentionPolicy: RetentionPolicy {
-        RetentionPolicy(
-            limit: historyLimit >= Settings.historyLimitRange.lowerBound ? historyLimit : nil,
-            keepsPinned: historyKeepsPinned
-        )
+        let rule: RetentionRule = switch historyMode {
+        case .off: .keepEverything
+        case .count: .newest(historyLimit)
+        case .age: .within(days: historyDays)
+        }
+        return RetentionPolicy(rule: rule, keepsPinned: historyKeepsPinned)
     }
 
     /// The slider's travel. The floor is deliberately not 1: a cap low enough to delete
@@ -277,7 +307,12 @@ final class Settings {
     /// one click can't vaporise a month of history.
     static let defaultHistoryLimit = 250
     /// Slider granularity. Fine enough to stop on 145 or 175, coarse enough to drag.
+    ///
+    /// Applied by rounding in the binding rather than by `Slider`'s `step:`, which draws a
+    /// tick per step — 390 of them merge into a solid line under the track.
     static let historyLimitStep = 5
+    /// Where the age slider lands the first time that mode is chosen.
+    static let defaultHistoryDays = 30
 
     private let defaults = UserDefaults.standard
 
@@ -314,7 +349,9 @@ final class Settings {
         static let readAloudEngine = "readAloudEngine"
         static let elevenLabsVoiceID = "elevenLabsVoiceID"
         static let elevenLabsModel = "elevenLabsModel"
+        static let historyMode = "historyMode"
         static let historyLimit = "historyLimit"
+        static let historyDays = "historyDays"
         static let historyKeepsPinned = "historyKeepsPinned"
     }
 
@@ -390,9 +427,18 @@ final class Settings {
             ?? .system
         elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
         elevenLabsModel = defaults.string(forKey: Keys.elevenLabsModel) ?? ElevenLabs.defaultModel
-        // `object(forKey:)` rather than `integer(forKey:)`: both return 0 when nothing
-        // is stored, and 0 is off either way, but this keeps "never set" readable.
-        historyLimit = defaults.object(forKey: Keys.historyLimit) as? Int ?? 0
+        // A stored limit with no stored mode is a user who set one before the age rule
+        // existed: they chose a number of dictations, so that is the mode they get.
+        let storedLimit = defaults.object(forKey: Keys.historyLimit) as? Int
+        historyLimit = (storedLimit ?? 0) > 0 ? storedLimit! : Settings.defaultHistoryLimit
+        historyDays = defaults.object(forKey: Keys.historyDays) as? Int
+            ?? Settings.defaultHistoryDays
+        if let stored = defaults.string(forKey: Keys.historyMode),
+           let mode = HistoryRetentionMode(rawValue: stored) {
+            historyMode = mode
+        } else {
+            historyMode = (storedLimit ?? 0) > 0 ? .count : .off
+        }
         historyKeepsPinned = defaults.object(forKey: Keys.historyKeepsPinned) as? Bool ?? true
 
         // `didSet` does not fire during initialization, so without these two writes the

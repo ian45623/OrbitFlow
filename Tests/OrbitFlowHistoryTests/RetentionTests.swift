@@ -2,18 +2,28 @@ import Foundation
 import Testing
 @testable import OrbitFlowHistory
 
-/// Retention is decided by recency, so every sample is placed relative to one fixed
-/// moment. Minute 0 is the oldest; higher minutes are newer and survive longer.
-private let noon = Date(timeIntervalSince1970: 1_800_000_000)
+/// Retention is decided against a clock, so every sample is placed relative to one fixed
+/// moment that the tests also pass in as `now`. Nothing here reads the real time.
+private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+private let day: TimeInterval = 86_400
+
+/// Minute 0 is the oldest; higher minutes are newer and survive a count rule longer.
 private func run(
-    _ minutesAfterNoon: Double,
-    pinned: Bool = false,
-    id: UUID = UUID()
+    _ minutesOld: Double,
+    pinned: Bool = false
 ) -> HistoryItem {
+    item(age: minutesOld * 60, pinned: pinned)
+}
+
+private func run(daysOld: Double, pinned: Bool = false) -> HistoryItem {
+    item(age: daysOld * day, pinned: pinned)
+}
+
+private func item(age: TimeInterval, pinned: Bool) -> HistoryItem {
     HistoryItem(
-        id: id,
-        date: noon.addingTimeInterval(minutesAfterNoon * 60),
+        id: UUID(),
+        date: now.addingTimeInterval(-age),
         destination: "Slack",
         words: 10,
         isPinned: pinned,
@@ -22,74 +32,93 @@ private func run(
     )
 }
 
-private func policy(_ limit: Int?, keepsPinned: Bool = true) -> RetentionPolicy {
-    RetentionPolicy(limit: limit, keepsPinned: keepsPinned)
+private func policy(_ rule: RetentionRule, keepsPinned: Bool = true) -> RetentionPolicy {
+    RetentionPolicy(rule: rule, keepsPinned: keepsPinned)
 }
 
-// MARK: - No limit
+private func expired(_ items: [HistoryItem], _ policy: RetentionPolicy) -> Set<UUID> {
+    History.expired(from: items, policy: policy, now: now)
+}
 
-@Test("With no limit, nothing expires")
-func noLimitKeepsEverything() {
+// MARK: - Keeping everything
+
+@Test("The off rule expires nothing")
+func keepEverythingExpiresNothing() {
     let items = (0..<50).map { run(Double($0)) }
 
-    #expect(History.expired(from: items, policy: policy(nil)).isEmpty)
+    #expect(expired(items, policy(.keepEverything)).isEmpty)
 }
 
-@Test("A limit of zero keeps everything rather than deleting everything")
-func zeroLimitKeepsEverything() {
+@Test("A count of zero keeps everything rather than deleting everything")
+func zeroCountKeepsEverything() {
     let items = (0..<10).map { run(Double($0)) }
 
-    #expect(History.expired(from: items, policy: policy(0)).isEmpty)
+    #expect(expired(items, policy(.newest(0))).isEmpty)
 }
 
-@Test("A negative limit keeps everything")
-func negativeLimitKeepsEverything() {
+@Test("A negative count keeps everything")
+func negativeCountKeepsEverything() {
     let items = (0..<10).map { run(Double($0)) }
 
-    #expect(History.expired(from: items, policy: policy(-5)).isEmpty)
+    #expect(expired(items, policy(.newest(-5))).isEmpty)
+}
+
+@Test("A window of zero days keeps everything rather than deleting everything")
+func zeroDayWindowKeepsEverything() {
+    let items = (0..<10).map { run(daysOld: Double($0) * 100) }
+
+    #expect(expired(items, policy(.within(days: 0))).isEmpty)
+}
+
+@Test("A negative window keeps everything")
+func negativeWindowKeepsEverything() {
+    let items = (0..<10).map { run(daysOld: Double($0) * 100) }
+
+    #expect(expired(items, policy(.within(days: -30))).isEmpty)
 }
 
 @Test("An empty history expires nothing")
 func emptyHistoryExpiresNothing() {
-    #expect(History.expired(from: [], policy: policy(100)).isEmpty)
+    #expect(expired([], policy(.newest(100))).isEmpty)
+    #expect(expired([], policy(.within(days: 30))).isEmpty)
 }
 
-// MARK: - The count
+// MARK: - Count
 
-@Test("A history under the limit loses nothing")
-func underTheLimitKeepsEverything() {
+@Test("A history under the count loses nothing")
+func underTheCountKeepsEverything() {
     let items = (0..<3).map { run(Double($0)) }
 
-    #expect(History.expired(from: items, policy: policy(10)).isEmpty)
+    #expect(expired(items, policy(.newest(10))).isEmpty)
 }
 
-@Test("A history of exactly the limit loses nothing")
-func exactlyTheLimitKeepsEverything() {
+@Test("A history of exactly the count loses nothing")
+func exactlyTheCountKeepsEverything() {
     let items = (0..<10).map { run(Double($0)) }
 
-    #expect(History.expired(from: items, policy: policy(10)).isEmpty)
+    #expect(expired(items, policy(.newest(10))).isEmpty)
 }
 
-@Test("Past the limit, the oldest dictations expire")
-func pastTheLimitTheOldestExpire() {
-    let oldest = run(0)
-    let older = run(1)
-    let newer = run(2)
-    let newest = run(3)
+@Test("Past the count, the oldest dictations expire")
+func pastTheCountTheOldestExpire() {
+    let oldest = run(3)
+    let older = run(2)
+    let newer = run(1)
+    let newest = run(0)
 
-    let expired = History.expired(from: [oldest, older, newer, newest], policy: policy(2))
+    let gone = expired([oldest, older, newer, newest], policy(.newest(2)))
 
-    #expect(expired == [oldest.id, older.id])
+    #expect(gone == [oldest.id, older.id])
 }
 
 @Test("Expiry doesn't depend on the order the items arrive in")
 func orderOfInputDoesNotMatter() {
-    let oldest = run(0)
+    let oldest = run(2)
     let middle = run(1)
-    let newest = run(2)
+    let newest = run(0)
 
-    let forwards = History.expired(from: [oldest, middle, newest], policy: policy(1))
-    let backwards = History.expired(from: [newest, middle, oldest], policy: policy(1))
+    let forwards = expired([oldest, middle, newest], policy(.newest(1)))
+    let backwards = expired([newest, middle, oldest], policy(.newest(1)))
 
     #expect(forwards == [oldest.id, middle.id])
     #expect(forwards == backwards)
@@ -101,61 +130,119 @@ func tiesAreDeterministic() {
     let b = run(0)
     let c = run(0)
 
-    let first = History.expired(from: [a, b, c], policy: policy(1))
-    let second = History.expired(from: [c, a, b], policy: policy(1))
+    let first = expired([a, b, c], policy(.newest(1)))
+    let second = expired([c, a, b], policy(.newest(1)))
 
     #expect(first.count == 2)
     #expect(first == second)
 }
 
+// MARK: - Age
+
+@Test("Everything inside the window survives")
+func insideTheWindowSurvives() {
+    let items = [run(daysOld: 1), run(daysOld: 10), run(daysOld: 29)]
+
+    #expect(expired(items, policy(.within(days: 30))).isEmpty)
+}
+
+@Test("A dictation exactly at the edge of the window is kept")
+func theWindowBoundaryIsKept() {
+    let edge = run(daysOld: 30)
+
+    #expect(expired([edge], policy(.within(days: 30))).isEmpty)
+}
+
+@Test("A dictation past the window expires")
+func pastTheWindowExpires() {
+    let stale = run(daysOld: 31)
+    let fresh = run(daysOld: 29)
+
+    #expect(expired([stale, fresh], policy(.within(days: 30))) == [stale.id])
+}
+
+@Test("A longer window keeps what a shorter one would have deleted")
+func aLongerWindowKeepsMore() {
+    let items = (1...500).map { run(daysOld: Double($0)) }
+
+    let week = expired(items, policy(.within(days: 7)))
+    let year = expired(items, policy(.within(days: 365)))
+
+    #expect(week.count == 493)
+    #expect(year.count == 135)
+    #expect(year.isSubset(of: week))
+}
+
 // MARK: - Pinned
 
-@Test("Pinned dictations never expire when they're kept")
-func pinnedSurviveWhenKept() {
-    let pinned = run(0, pinned: true)
-    let items = [pinned] + (1..<10).map { run(Double($0)) }
+@Test("Pinned dictations never expire under a count when they're kept")
+func pinnedSurviveACount() {
+    let pinned = run(20, pinned: true)
+    let items = [pinned] + (0..<10).map { run(Double($0)) }
 
-    let expired = History.expired(from: items, policy: policy(2, keepsPinned: true))
+    #expect(!expired(items, policy(.newest(2))).contains(pinned.id))
+}
 
-    #expect(!expired.contains(pinned.id))
+@Test("Pinned dictations never expire under a window when they're kept")
+func pinnedSurviveAWindow() {
+    let pinned = run(daysOld: 400, pinned: true)
+    let stale = run(daysOld: 400)
+
+    let gone = expired([pinned, stale], policy(.within(days: 30)))
+
+    #expect(gone == [stale.id])
 }
 
 @Test("Pinned dictations don't count toward the limit")
 func pinnedDoNotCountTowardTheLimit() {
-    let pinned = (0..<3).map { run(Double($0), pinned: true) }
-    let unpinned = (10..<14).map { run(Double($0)) }
+    let pinned = (0..<3).map { run(Double($0) + 20, pinned: true) }
+    let unpinned = (0..<4).map { run(Double($0)) }
 
-    let expired = History.expired(from: pinned + unpinned, policy: policy(2, keepsPinned: true))
+    let gone = expired(pinned + unpinned, policy(.newest(2)))
 
     // The two newest unpinned survive alongside all three pinned: five kept, not two.
-    #expect(expired == [unpinned[0].id, unpinned[1].id])
+    #expect(gone == [unpinned[2].id, unpinned[3].id])
 }
 
 @Test("A history of nothing but pinned dictations loses nothing")
 func allPinnedKeepsEverything() {
     let items = (0..<10).map { run(Double($0), pinned: true) }
 
-    #expect(History.expired(from: items, policy: policy(1, keepsPinned: true)).isEmpty)
+    #expect(expired(items, policy(.newest(1))).isEmpty)
 }
 
 @Test("Pinned dictations expire like any other when they aren't kept")
 func pinnedExpireWhenNotKept() {
-    let oldest = run(0, pinned: true)
+    let oldest = run(2, pinned: true)
     let older = run(1)
-    let newest = run(2)
+    let newest = run(0)
 
-    let expired = History.expired(from: [oldest, older, newest], policy: policy(1, keepsPinned: false))
+    let gone = expired([oldest, older, newest], policy(.newest(1), keepsPinned: false))
 
-    #expect(expired == [oldest.id, older.id])
+    #expect(gone == [oldest.id, older.id])
 }
 
-@Test("With pinning off, pinned dictations count toward the limit")
-func pinnedCountTowardTheLimitWhenNotKept() {
-    let pinned = (0..<3).map { run(Double($0), pinned: true) }
-    let unpinned = (10..<12).map { run(Double($0)) }
+@Test("With pinning off, a window deletes pinned dictations too")
+func pinnedExpireInAWindowWhenNotKept() {
+    let pinned = run(daysOld: 400, pinned: true)
+    let fresh = run(daysOld: 1)
 
-    let expired = History.expired(from: pinned + unpinned, policy: policy(2, keepsPinned: false))
+    let gone = expired([pinned, fresh], policy(.within(days: 30), keepsPinned: false))
 
-    // Only the two newest survive, pinned or not.
-    #expect(expired == Set(pinned.map(\.id)))
+    #expect(gone == [pinned.id])
+}
+
+// MARK: - The presets the slider stops on
+
+@Test("The age presets climb from a week to two years")
+func presetsAreOrdered() {
+    #expect(RetentionRule.dayPresets == [7, 14, 30, 60, 90, 180, 365, 730])
+}
+
+@Test("A year reads as a year rather than as 365 days")
+func yearsReadAsYears() {
+    #expect(RetentionRule.dayLabel(7) == "7 days")
+    #expect(RetentionRule.dayLabel(180) == "180 days")
+    #expect(RetentionRule.dayLabel(365) == "1 year")
+    #expect(RetentionRule.dayLabel(730) == "2 years")
 }

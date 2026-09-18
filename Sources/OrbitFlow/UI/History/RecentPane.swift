@@ -109,7 +109,11 @@ struct RecentPane: View {
     }
 }
 
-/// The rail: what happened to a dictation, and where it went.
+/// The rail: what happened to a dictation.
+///
+/// Collapses to a strip of icons rather than disappearing. A pane that can vanish entirely
+/// leaves nothing to click to bring it back, and the filters are how you find anything in a
+/// few hundred dictations — they should still be one click away when the rail is narrow.
 struct FilterRail: View {
     @Binding var filter: HistoryFilter
     let counts: [HistoryFilter: Int]
@@ -118,80 +122,105 @@ struct FilterRail: View {
     /// should stay closed after a relaunch, and this is a preference, not a mode.
     @AppStorage("recentFilterRailOpen") private var isOpen = true
 
+    private struct Item {
+        let filter: HistoryFilter
+        let label: String
+        let icon: String
+    }
+
+    private let items: [Item] = [
+        Item(filter: .everything, label: "Everything", icon: "tray.full"),
+        Item(filter: .pinned, label: "Pinned", icon: "pin"),
+        Item(filter: .rewritten, label: "Rewritten", icon: "wand.and.sparkles"),
+        Item(filter: .corrected, label: "Corrected", icon: "character.cursor.ibeam"),
+        Item(filter: .longForm, label: "Long form", icon: "text.alignleft"),
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            heading("View")
+            toggle
 
-            if isOpen {
-                row(.everything, "Everything", icon: "tray.full")
-                row(.pinned, "Pinned", icon: "pin")
-                row(.rewritten, "Rewritten", icon: "wand.and.sparkles")
-                row(.corrected, "Corrected", icon: "character.cursor.ibeam")
-                row(.longForm, "Long form", icon: "text.alignleft")
+            ForEach(items, id: \.label) { item in
+                row(item)
             }
 
             Spacer()
 
-            VStack(alignment: .leading, spacing: DS.Space.tight) {
-                MetaLabel(text: "⌘F  Search")
-                MetaLabel(text: "⌘C  Copy")
-                MetaLabel(text: "⌘⌥R  Rewrite")
+            if isOpen {
+                VStack(alignment: .leading, spacing: DS.Space.tight) {
+                    MetaLabel(text: "⌘F  Search")
+                    MetaLabel(text: "⌘C  Copy")
+                    MetaLabel(text: "⌘⌥R  Rewrite")
+                }
+                .padding(DS.Space.roomy)
             }
-            .padding(DS.Space.roomy)
         }
-        .frame(width: 200, alignment: .leading)
+        .frame(width: isOpen ? 200 : 52, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.Color.surface)
         // Fixed, and it means it: without this the transcript's ideal width won the layout
         // and the rail was pushed off the left edge of the window.
         .fixedSize(horizontal: true, vertical: false)
+        .animation(DS.Motion.panel, value: isOpen)
     }
 
-    private func heading(_ text: String) -> some View {
+    private var toggle: some View {
         Button {
             withAnimation(DS.Motion.panel) { isOpen.toggle() }
         } label: {
-            HStack(spacing: DS.Space.tight) {
-                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(DS.Color.inkFaint)
-                MetaLabel(text: text)
-                Spacer()
+            HStack(spacing: DS.Space.snug) {
+                Image(systemName: isOpen ? "sidebar.left" : "sidebar.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DS.Color.inkMuted)
+                    .frame(width: 16)
+                if isOpen {
+                    MetaLabel(text: "View")
+                    Spacer(minLength: 0)
+                }
             }
+            .padding(.horizontal, DS.Space.base)
+            .padding(.vertical, DS.Space.snug)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .help(isOpen ? "Hide the filters" : "Show the filters")
-        .padding(.horizontal, DS.Space.roomy)
-        .padding(.top, DS.Space.roomy)
+        .padding(.horizontal, DS.Space.snug)
+        .padding(.top, DS.Space.base)
         .padding(.bottom, DS.Space.snug)
     }
 
-    private func row(_ candidate: HistoryFilter, _ label: String, icon: String) -> some View {
-        Button {
-            filter = candidate
+    private func row(_ item: Item) -> some View {
+        let isCurrent = filter == item.filter
+        let count = counts[item.filter] ?? 0
+        return Button {
+            filter = item.filter
         } label: {
             HStack(spacing: DS.Space.snug) {
-                Image(systemName: icon)
+                Image(systemName: item.icon)
                     .font(.system(size: 11))
-                    .foregroundStyle(filter == candidate ? DS.Color.ink : DS.Color.inkMuted)
+                    .foregroundStyle(isCurrent ? DS.Color.ink : DS.Color.inkMuted)
                     .frame(width: 16)
-                Text(label)
-                    .font(filter == candidate ? DS.Font.bodyEmphasis : DS.Font.body)
-                    .foregroundStyle(DS.Color.ink)
-                    .lineLimit(1)
-                Spacer(minLength: DS.Space.tight)
-                MetaLabel(text: "\(counts[candidate] ?? 0)")
+                if isOpen {
+                    Text(item.label)
+                        .font(isCurrent ? DS.Font.bodyEmphasis : DS.Font.body)
+                        .foregroundStyle(DS.Color.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: DS.Space.tight)
+                    MetaLabel(text: "\(count)")
+                }
             }
             .padding(.horizontal, DS.Space.base)
             .padding(.vertical, DS.Space.snug)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.control)
-                    .fill(filter == candidate ? DS.Color.surfaceHover : .clear)
+                    .fill(isCurrent ? DS.Color.surfaceHover : .clear)
             )
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        // The count goes in the tooltip when the labels are gone, so a collapsed rail still
+        // answers "how many pinned?" without reopening it.
+        .help(isOpen ? item.label : "\(item.label) — \(count)")
         .padding(.horizontal, DS.Space.snug)
     }
 }
