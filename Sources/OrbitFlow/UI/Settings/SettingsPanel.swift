@@ -400,6 +400,40 @@ struct SettingsPanel: View {
             Hairline()
 
             SettingsRow(
+                label: "Auto-delete",
+                help: "Trim the oldest dictations as new ones arrive."
+            ) {
+                Toggle("", isOn: autoDeleteBinding)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            } detail: {
+                note("Off by default. Nothing is deleted until you turn this on, and what "
+                    + "goes is gone — there is no trash to recover it from.")
+            }
+
+            if settings.historyLimit > 0 {
+                Hairline()
+                historyLimitRow
+                Hairline()
+
+                SettingsRow(
+                    label: "Keep pinned",
+                    help: "Pinned dictations survive the trim."
+                ) {
+                    Toggle("", isOn: $settings.historyKeepsPinned)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .onChange(of: settings.historyKeepsPinned) { RunLog.enforceRetention() }
+                } detail: {
+                    note("Pinned dictations don't count toward the limit either, so pinning "
+                        + "one never pushes another out. Turn this off and the limit applies "
+                        + "to everything, pins included.")
+                }
+            }
+
+            Hairline()
+
+            SettingsRow(
                 label: "When you close the window",
                 help: "Orbit Flow keeps running and the key stays armed."
             ) {
@@ -1266,6 +1300,55 @@ struct SettingsPanel: View {
 
     private func byteCount(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// `Slider` works in `Double`, and a range split across two lines reads as a prefix
+    /// `...` to the parser, so the conversion is named rather than inlined.
+    private static let historyLimitBounds =
+        Double(Settings.historyLimitRange.lowerBound)...Double(Settings.historyLimitRange.upperBound)
+
+    /// The limit slider. Its own row because a slider and its readout don't fit beside a
+    /// switch at this column width, and because it only exists while auto-delete is on.
+    private var historyLimitRow: some View {
+        SettingsRow(
+            label: "Keep newest",
+            help: "How many dictations to hold on to."
+        ) {
+            HStack(spacing: DS.Space.base) {
+                Slider(
+                    value: Binding(
+                        get: { Double(settings.historyLimit) },
+                        set: { settings.historyLimit = Int($0) }
+                    ),
+                    in: Self.historyLimitBounds,
+                    step: Double(Settings.historyLimitStep)
+                ) { editing in
+                    // On commit only. Trimming on every frame of a drag would rewrite the
+                    // whole log a hundred times on the way to the number you wanted.
+                    if !editing { RunLog.enforceRetention() }
+                }
+                .tint(DS.Color.ink)
+                .frame(maxWidth: 260)
+
+                MetaLabel(text: "\(settings.historyLimit)", color: DS.Color.ink, reserving: 4)
+            }
+        } detail: {
+            note("Counted from the newest. Once history passes this, the oldest are deleted "
+                + "as each new dictation arrives.")
+        }
+    }
+
+    /// Auto-delete is the limit being non-zero, so the switch writes the number rather than
+    /// a second stored flag that could disagree with it. Switching on restores nothing —
+    /// it starts at the default, because the previous limit was rejected by turning it off.
+    private var autoDeleteBinding: Binding<Bool> {
+        Binding(
+            get: { settings.historyLimit > 0 },
+            set: { isOn in
+                settings.historyLimit = isOn ? Settings.defaultHistoryLimit : 0
+                if isOn { RunLog.enforceRetention() }
+            }
+        )
     }
 
     private func note(_ text: String) -> some View {

@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
+import OrbitFlowHistory
 import OrbitFlowHotkey
 
 /// Which speech engine transcribes an utterance.
@@ -245,6 +246,39 @@ final class Settings {
         didSet { defaults.set(elevenLabsModel, forKey: Keys.elevenLabsModel) }
     }
 
+    /// How many dictations history keeps before the oldest are deleted automatically.
+    ///
+    /// Zero — the default — is off, and keeps everything. A feature that deletes the
+    /// user's own data without asking has to be opted into, which is also why the panel
+    /// starts a newly-enabled slider at `defaultHistoryLimit` rather than at the floor.
+    var historyLimit: Int {
+        didSet { defaults.set(historyLimit, forKey: Keys.historyLimit) }
+    }
+
+    /// Pinned dictations are exempt from `historyLimit`: never auto-deleted, and never
+    /// counted against it. On by default — pinning is the only undo this feature has.
+    var historyKeepsPinned: Bool {
+        didSet { defaults.set(historyKeepsPinned, forKey: Keys.historyKeepsPinned) }
+    }
+
+    /// What `RunLog` enforces after each dictation. The zero-means-off translation lives
+    /// here so no caller has to remember it.
+    var retentionPolicy: RetentionPolicy {
+        RetentionPolicy(
+            limit: historyLimit >= Settings.historyLimitRange.lowerBound ? historyLimit : nil,
+            keepsPinned: historyKeepsPinned
+        )
+    }
+
+    /// The slider's travel. The floor is deliberately not 1: a cap low enough to delete
+    /// this morning's work before lunch is a mistake the UI shouldn't offer.
+    static let historyLimitRange = 50...2000
+    /// Where the slider lands the first time auto-delete is switched on. High enough that
+    /// one click can't vaporise a month of history.
+    static let defaultHistoryLimit = 250
+    /// Slider granularity. Fine enough to stop on 145 or 175, coarse enough to drag.
+    static let historyLimitStep = 5
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -280,6 +314,8 @@ final class Settings {
         static let readAloudEngine = "readAloudEngine"
         static let elevenLabsVoiceID = "elevenLabsVoiceID"
         static let elevenLabsModel = "elevenLabsModel"
+        static let historyLimit = "historyLimit"
+        static let historyKeepsPinned = "historyKeepsPinned"
     }
 
     private init() {
@@ -354,6 +390,10 @@ final class Settings {
             ?? .system
         elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
         elevenLabsModel = defaults.string(forKey: Keys.elevenLabsModel) ?? ElevenLabs.defaultModel
+        // `object(forKey:)` rather than `integer(forKey:)`: both return 0 when nothing
+        // is stored, and 0 is off either way, but this keeps "never set" readable.
+        historyLimit = defaults.object(forKey: Keys.historyLimit) as? Int ?? 0
+        historyKeepsPinned = defaults.object(forKey: Keys.historyKeepsPinned) as? Bool ?? true
 
         // `didSet` does not fire during initialization, so without these two writes the
         // migration above would re-run on every launch and a legacy `cloud` string would

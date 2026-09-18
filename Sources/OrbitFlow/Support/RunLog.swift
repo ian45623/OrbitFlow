@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowHistory
 import OrbitFlowHotkey
 import Foundation
 
@@ -123,6 +124,21 @@ struct DictationRun: Codable, Sendable, Identifiable {
     }
 }
 
+extension DictationRun {
+    /// This run reduced to the facts history sorts, filters and expires by.
+    var historyItem: HistoryItem {
+        HistoryItem(
+            id: id,
+            date: date,
+            destination: destinationApp,
+            words: text.split(whereSeparator: \.isWhitespace).count,
+            isPinned: isPinned ?? false,
+            wasRewritten: !(rewrites ?? []).isEmpty,
+            corrections: corrections?.count ?? 0
+        )
+    }
+}
+
 /// Appends every dictation to a JSONL file and regenerates a dashboard beside it.
 ///
 /// The dashboard is a plain file with a meta-refresh rather than a served page: `file://`
@@ -142,14 +158,42 @@ enum RunLog {
 
     static func record(_ run: DictationRun) {
         append(run)
-        regenerate()
-        RunStore.shared.reload()
+        published()
     }
 
     static func record(_ runs: [DictationRun]) {
         runs.forEach(append)
+        published()
+    }
+
+    /// Everything a write owes the rest of the app: trim to the retention setting, then
+    /// republish the dashboard and the Recent pane.
+    ///
+    /// The guard is not an optimisation for its own sake — `enforceRetention` deletes by
+    /// rewriting the whole file, and doing that unconditionally would turn every
+    /// dictation's append into a full rewrite plus a second dashboard render.
+    private static func published() {
+        guard !enforceRetention() else { return }
         regenerate()
         RunStore.shared.reload()
+    }
+
+    /// Deletes whatever has fallen past `Settings.retentionPolicy`.
+    ///
+    /// Returns whether anything went — and when it did, the file has already been
+    /// rewritten, the dashboard regenerated and the store reloaded, so the caller owes
+    /// nothing further.
+    @discardableResult
+    static func enforceRetention() -> Bool {
+        let policy = Settings.shared.retentionPolicy
+        guard policy.limit != nil else { return false }
+
+        let runs = load()
+        let expired = History.expired(from: runs.map(\.historyItem), policy: policy)
+        guard !expired.isEmpty else { return false }
+
+        rewrite(runs.filter { !expired.contains($0.id) })
+        return true
     }
 
     private static func append(_ run: DictationRun) {

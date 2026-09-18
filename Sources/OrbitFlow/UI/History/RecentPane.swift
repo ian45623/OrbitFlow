@@ -89,17 +89,7 @@ struct RecentPane: View {
     /// Every run as the history target sees it: newest first, filtered, then searched.
     /// Search runs last so "everything matching 'migration' that landed in Cursor" works.
     private var items: [HistoryItem] {
-        store.runs.map { run in
-            HistoryItem(
-                id: run.id,
-                date: run.date,
-                destination: run.destinationApp,
-                words: run.text.split(whereSeparator: \.isWhitespace).count,
-                isPinned: run.isPinned ?? false,
-                wasRewritten: !(run.rewrites ?? []).isEmpty,
-                corrections: run.corrections?.count ?? 0
-            )
-        }
+        store.runs.map(\.historyItem)
     }
 
     /// Filtered, then searched, newest first. One flat list: dictations arrive one at a
