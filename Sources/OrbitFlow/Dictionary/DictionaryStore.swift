@@ -112,11 +112,20 @@ final class DictionaryStore {
                 guard !line.isEmpty else { return nil }
             }
 
-            if let arrow = line.range(of: "->") {
+            // `=>` first: it means the same as `->` plus "match the whole phrase", and
+            // checking the plain arrow first would never see it.
+            for (marker, requiresPhrase) in [("=>", true), ("->", false)] {
+                guard let arrow = line.range(of: marker) else { continue }
                 let hear = line[..<arrow.lowerBound].trimmingCharacters(in: .whitespaces)
                 let write = line[arrow.upperBound...].trimmingCharacters(in: .whitespaces)
                 guard !hear.isEmpty, !write.isEmpty else { return nil }
-                return DictionaryEntry(kind: .correction, write: write, hear: hear, isEnabled: isEnabled)
+                return DictionaryEntry(
+                    kind: .correction,
+                    write: write,
+                    hear: hear,
+                    isEnabled: isEnabled,
+                    requiresPhrase: requiresPhrase
+                )
             }
 
             return DictionaryEntry(kind: .term, write: line, isEnabled: isEnabled)
