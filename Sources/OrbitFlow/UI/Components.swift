@@ -70,8 +70,8 @@ struct Tag: View {
     }
 }
 
-/// Monospaced-digit numerals — durations, timings, the elapsed counter. Serif, so the
-/// figures sit with the transcript rather than looking bolted on from a terminal.
+/// Monospaced-digit numerals — durations, timings, the elapsed counter. Mono, because a
+/// duration is a measurement (rule 3), and mono figures don't reflow as they tick.
 struct Numeral: View {
     let text: String
     var large = false
@@ -81,6 +81,153 @@ struct Numeral: View {
         Text(text)
             .font(large ? DS.Font.counter : DS.Font.numeral)
             .foregroundStyle(color)
+    }
+}
+
+/// Instrumentation: one fact about a row, in the mono slot on its right.
+///
+/// Rule 3 — metadata is mono, 10–11pt, uppercase, in a fixed slot. Uppercasing happens
+/// here rather than at call sites, so a status can be written as a sentence-case string and
+/// still land as instrumentation. The slot holds its width through a value change: a row
+/// whose right edge jumps as "WAITING" becomes "ALLOWED" reads as the layout twitching.
+struct MetaLabel: View {
+    let text: String
+    var color: Color = DS.Color.inkFaint
+    var emphasis = false
+    /// Reserve at least this much width. The caller passes the longest value the slot can
+    /// hold, measured in characters.
+    var reserving: Int?
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(emphasis ? DS.Font.metaEmphasis : DS.Font.meta)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(minWidth: reserved, alignment: .trailing)
+    }
+
+    /// JetBrains Mono's advance width is 0.6 em, so a character count converts to points
+    /// without measuring the string.
+    private var reserved: CGFloat? {
+        guard let reserving else { return nil }
+        return CGFloat(reserving) * (emphasis ? 11 : 10) * 0.6
+    }
+}
+
+/// A step in a sequence the user works through: onboarding's four, and Settings' one-line
+/// rows. Collapsed it is one line — state, title, description, and a fact on the right.
+/// Expanded it keeps that line and opens `content` underneath.
+///
+/// The state disc is the only place `positive` and `caution` appear in a row, and it is
+/// never the only signal: the meta slot says the same thing in words, because hue doesn't
+/// carry state on its own (rule 1).
+struct StepRow<Content: View>: View {
+    enum State {
+        /// Not reached yet, or nothing to do.
+        case waiting
+        /// Done — a permission granted, a key chosen.
+        case done
+        /// Needs the user before it works.
+        case needsYou
+    }
+
+    let title: String
+    let description: String
+    var state: State = .waiting
+    var meta: String?
+    var metaReserving: Int?
+    var isExpanded = false
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
+            HStack(spacing: DS.Space.base) {
+                disc
+                Text(title)
+                    .font(DS.Font.bodyEmphasis)
+                    .foregroundStyle(DS.Color.ink)
+                Text(description)
+                    .font(DS.Font.body)
+                    .foregroundStyle(DS.Color.inkMuted)
+                    .lineLimit(1)
+                Spacer(minLength: DS.Space.base)
+                if let meta {
+                    MetaLabel(text: meta, color: metaColor, reserving: metaReserving)
+                }
+            }
+
+            if isExpanded {
+                content()
+                    .padding(.leading, discSize + DS.Space.base)
+            }
+        }
+        .padding(DS.Space.roomy)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .fill(isExpanded ? DS.Color.surface : DS.Color.canvas)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .strokeBorder(
+                    isExpanded ? DS.Color.ink : DS.Color.line,
+                    lineWidth: isExpanded ? DS.Border.emphasis : DS.Border.hairline
+                )
+        )
+        .animation(DS.Motion.panel, value: isExpanded)
+    }
+
+    private var metaColor: Color {
+        switch state {
+        case .waiting: DS.Color.inkFaint
+        case .done: DS.Color.inkFaint
+        case .needsYou: DS.Color.caution
+        }
+    }
+
+    private let discSize: CGFloat = 20
+
+    @ViewBuilder
+    private var disc: some View {
+        switch state {
+        case .waiting:
+            Circle()
+                .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+                .frame(width: discSize, height: discSize)
+        case .done:
+            Circle()
+                .fill(DS.Color.positive)
+                .frame(width: discSize, height: discSize)
+                .overlay(
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(DS.Color.surface)
+                )
+        case .needsYou:
+            Circle()
+                .strokeBorder(DS.Color.ink, lineWidth: DS.Border.emphasis)
+                .frame(width: discSize, height: discSize)
+        }
+    }
+}
+
+extension StepRow where Content == EmptyView {
+    init(
+        title: String,
+        description: String,
+        state: State = .waiting,
+        meta: String? = nil,
+        metaReserving: Int? = nil
+    ) {
+        self.init(
+            title: title,
+            description: description,
+            state: state,
+            meta: meta,
+            metaReserving: metaReserving,
+            isExpanded: false,
+            content: { EmptyView() }
+        )
     }
 }
 

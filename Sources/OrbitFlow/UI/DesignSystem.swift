@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The design system for Orbit Flow.
@@ -10,14 +11,17 @@ import SwiftUI
 /// Two faces: cool graphite in dark appearance, warm-neutral paper in light. Same token
 /// names, so a view is written once and both faces work.
 ///
-/// The rules that keep this from drifting:
-/// - **One accent.** `signal` is red, it means recording, and nothing else in the app
-///   is ever red. Selection and focus are carried by surface and weight, not by hue.
-/// - **Transcribed text is prose.** It gets the serif, generous leading and a capped
-///   measure, because it is writing and not log output.
-/// - **Depth is one step.** A surface lifts off the canvas by a hairline and a shade.
-///   No bevels, no inner glow, no gradients anywhere.
-/// - **Sentence case.** No tracked-out uppercase labels.
+/// The five rules that keep this from drifting:
+/// 1. **Hue never carries state.** Surface and weight do. `signal` is red, it means
+///    recording, and nothing else in the app is ever red. `positive` and `caution` appear
+///    on status indicators only, never as chrome.
+/// 2. **Prose is serif**, capped at 66 characters, because it is writing and not log output.
+/// 3. **All metadata is mono**, 10–11pt, uppercase, in a fixed slot — timings, counts,
+///    statuses. Everything else is sentence case.
+/// 4. **One helper line per setting.** Anything longer goes behind a "?".
+/// 5. **Only the waveform moves on its own.**
+///
+/// Depth is one step: a hairline and a shade. No bevels, no inner glow, no gradients.
 ///
 /// Views must not contain literal values. If a component needs a number that isn't a
 /// token, add the token rather than inlining it.
@@ -26,28 +30,30 @@ enum DS {
     // MARK: - Color
 
     enum Color {
+        // Paper in light, graphite in dark. The light values are Foundation 1.0's; the
+        // dark ones are the same hues carried across, off blue so both faces read warm.
         /// The window ground. Everything sits on this.
-        static let canvas = face(light: 0xF6F6F4, dark: 0x101216)
+        static let canvas = face(light: 0xFAFAF8, dark: 0x121211)
 
         /// A raised surface — cards, sheets, the header bar.
-        static let surface = face(light: 0xFFFFFF, dark: 0x171A20)
+        static let surface = face(light: 0xFFFFFF, dark: 0x1A1A19)
 
         /// A surface under the pointer, or a selected segment.
-        static let surfaceHover = face(light: 0xF0F0ED, dark: 0x1D2128)
+        static let surfaceHover = face(light: 0xF4F4F0, dark: 0x222220)
 
         /// An inset field: search, text entry. Reads as cut into the surface.
-        static let field = face(light: 0xF1F1EE, dark: 0x0B0D10)
+        static let field = face(light: 0xF1F1EC, dark: 0x0D0D0C)
 
         /// The one drawn line in the system. Separates rows, edges surfaces.
-        static let line = face(light: 0xE3E3DF, dark: 0x262B33)
+        static let line = face(light: 0xE2E2DC, dark: 0x2A2A27)
 
         // Text
         /// Primary text and headings.
-        static let ink = face(light: 0x15171B, dark: 0xE9EBEF)
+        static let ink = face(light: 0x141414, dark: 0xEDEDE7)
         /// Supporting text — engine names, counts, help notes.
-        static let inkMuted = face(light: 0x5F646C, dark: 0x98A0AC)
+        static let inkMuted = face(light: 0x57574F, dark: 0xA3A399)
         /// Timestamps, placeholders, anything you read only if you look for it.
-        static let inkFaint = face(light: 0x92979F, dark: 0x636B77)
+        static let inkFaint = face(light: 0x6F6F67, dark: 0x7A7A72)
 
         // Accent — the only red in the app, and it only ever means "recording".
         static let signal = face(light: 0xC9342B, dark: 0xE04338)
@@ -75,7 +81,7 @@ enum DS {
         static let hudGlyphOnConfirm = swatch(0x16181C)
 
         /// Keyboard focus. Neutral on purpose — red is spoken for.
-        static let focusRing = face(light: 0xB4B8BE, dark: 0x5B6472)
+        static let focusRing = face(light: 0xB4B8BE, dark: 0x5B5B54)
 
         // Status. Used on indicators and verdicts, never as UI chrome.
         /// A rule that's on, an engine that agreed.
@@ -107,34 +113,69 @@ enum DS {
 
     // MARK: - Type
 
-    /// Two roles, both from system faces so nothing ships with the app.
+    /// Three roles, three faces, all bundled in `Contents/Resources/Fonts` and registered
+    /// by `ATSApplicationFontsPath` in Info.plist.
     ///
-    /// **New York** (`.serif`) carries what the app produces: transcribed prose and the
-    /// numbers you read while recording. **SF Pro** carries the interface around it.
-    /// The split is the point — content reads as a document, chrome stays quiet.
+    /// **Newsreader** carries what the app produces: transcribed prose and the display
+    /// lines. **Instrument Sans** carries the interface around it. **JetBrains Mono**
+    /// carries instrumentation — timings, counts, statuses — which is why those read as
+    /// measurements rather than as more interface.
+    ///
+    /// Every role falls back to the system face it replaced, so a bundle built without the
+    /// font files still renders: `custom(_:size:)` resolves to the system font when the
+    /// family is missing, and `fallback` keeps the serif and mono intent in that case.
     enum Font {
+        /// Family names as CoreText reports them.
+        private static let ui = "Instrument Sans"
+        private static let serif = "Newsreader"
+        private static let mono = "JetBrains Mono"
+
+        /// `Font.custom` silently falls back to the system face, but loses `design`, so the
+        /// serif and mono intents are restated here for the no-font-files case.
+        private static func face(
+            _ family: String,
+            _ size: CGFloat,
+            weight: SwiftUI.Font.Weight = .regular,
+            fallback: SwiftUI.Font.Design = .default
+        ) -> SwiftUI.Font {
+            guard NSFont(name: family, size: size) != nil else {
+                return .system(size: size, weight: weight, design: fallback)
+            }
+            return .custom(family, fixedSize: size).weight(weight)
+        }
+
         // Interface
         /// Section headings and the window's few titles.
-        static let title = SwiftUI.Font.system(size: 15, weight: .semibold)
+        static let title = face(ui, 15, weight: .semibold)
         /// Buttons, tabs, field labels.
-        static let label = SwiftUI.Font.system(size: 12, weight: .medium)
-        /// Row metadata, help notes, counts.
-        static let caption = SwiftUI.Font.system(size: 11)
+        static let label = face(ui, 12, weight: .medium)
+        /// Help notes and sentences that sit under a control. Sans, sentence case —
+        /// metadata belongs in `meta`, not here.
+        static let caption = face(ui, 11)
         /// Interface body text — settings notes, dictionary terms.
-        static let body = SwiftUI.Font.system(size: 13)
-        static let bodyEmphasis = SwiftUI.Font.system(size: 13, weight: .medium)
+        static let body = face(ui, 13)
+        static let bodyEmphasis = face(ui, 13, weight: .medium)
+
+        // Instrumentation. Rule 3: mono, 10–11pt, uppercase, in a fixed slot.
+        /// Row metadata, statuses, counts. Uppercase at the call site via `MetaLabel`.
+        static let meta = face(mono, 10, fallback: .monospaced)
+        /// The same slot when it carries the row's primary fact — a captured key, a step
+        /// counter — and needs to hold its own against the title next to it.
+        static let metaEmphasis = face(mono, 11, weight: .medium, fallback: .monospaced)
 
         // Content
         /// Transcribed text. Set like writing, because it is.
-        static let prose = SwiftUI.Font.system(size: 14, design: .serif)
+        static let prose = face(serif, 14, fallback: .serif)
         /// A short serif line for empty states and sheet titles.
-        static let display = SwiftUI.Font.system(size: 17, design: .serif)
+        static let display = face(serif, 17, fallback: .serif)
+        /// The one headline size in the app — onboarding's "Talk instead of type."
+        static let headline = face(serif, 28, fallback: .serif)
 
         // Numerals
         /// Durations and timings inline in a row.
-        static let numeral = SwiftUI.Font.system(size: 11, design: .serif).monospacedDigit()
+        static let numeral = face(mono, 11, fallback: .monospaced).monospacedDigit()
         /// The elapsed counter while recording.
-        static let counter = SwiftUI.Font.system(size: 15, design: .serif).monospacedDigit()
+        static let counter = face(mono, 15, fallback: .monospaced).monospacedDigit()
 
         /// Leading added to prose. Serif body wants more air than the sans.
         static let proseLeading: CGFloat = 4
@@ -152,7 +193,7 @@ enum DS {
         static let base: CGFloat = 12
         static let roomy: CGFloat = 16
         static let wide: CGFloat = 24
-        static let panel: CGFloat = 32
+        static let panel: CGFloat = 36
     }
 
     // MARK: - Radius
@@ -161,15 +202,13 @@ enum DS {
     /// The further an element floats from the window, the softer its corner.
     enum Radius {
         /// Inline tags and badges.
-        static let chip: CGFloat = 5
+        static let chip: CGFloat = 6
         /// Buttons, fields, segments.
-        static let control: CGFloat = 7
+        static let control: CGFloat = 8
         /// A surface sitting on the canvas.
-        static let card: CGFloat = 10
-        /// A sheet or the window itself.
-        static let window: CGFloat = 14
+        static let card: CGFloat = 12
         /// The floating HUD. The softest thing in the app — it's an overlay, not a panel.
-        static let hud: CGFloat = 18
+        static let hud: CGFloat = 20
     }
 
     // MARK: - Border

@@ -110,9 +110,7 @@ struct TranscriptionDetail: View {
                         speaker.speak(spoken)
                     }
                 }
-                Text("\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
-                    .font(DS.Font.caption)
-                    .foregroundStyle(DS.Color.inkFaint)
+                MetaLabel(text: "\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
             }
         }
         .padding(.horizontal, DS.Space.base)
@@ -266,9 +264,7 @@ struct TranscriptionDetail: View {
     /// What produced this version and when. The name is on its tab, so it isn't repeated.
     private func versionMeta(_ version: Version) -> some View {
         HStack(spacing: DS.Space.snug) {
-            Text(version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
+            MetaLabel(text: version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
                 .lineLimit(1)
             if isComparing, let text = version.text {
                 Spacer()
@@ -347,9 +343,7 @@ struct TranscriptionDetail: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: DS.Font.proseMeasure, alignment: .leading)
         } else {
-            Text("Rewriting…")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
+            MetaLabel(text: "Rewriting…")
         }
     }
 

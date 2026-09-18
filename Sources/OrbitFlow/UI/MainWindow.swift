@@ -77,9 +77,7 @@ private struct Header: View {
                 } label: {
                     HStack(spacing: DS.Space.tight) {
                         StatusDot(color: DS.Color.caution, isOn: true)
-                        Text("Hotkey off")
-                            .font(DS.Font.caption)
-                            .foregroundStyle(DS.Color.inkMuted)
+                        MetaLabel(text: "Hotkey off", color: DS.Color.caution)
                     }
                 }
                 .buttonStyle(.plain)
@@ -295,9 +293,7 @@ private struct TranscriptionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.snug) {
             HStack(spacing: DS.Space.snug) {
-                Text(run.engine)
-                    .font(DS.Font.caption)
-                    .foregroundStyle(DS.Color.inkMuted)
+                MetaLabel(text: run.engine, color: DS.Color.inkMuted)
                 // Pasted text has no timings, and "0.00s" on those rows is noise.
                 if run.processSeconds > 0 {
                     Numeral(text: String(format: "%.2fs", run.processSeconds), color: DS.Color.inkFaint)
@@ -322,7 +318,8 @@ private struct TranscriptionRow: View {
                 // timestamp for taller buttons on hover made the whole list jump.
                 ZStack(alignment: .trailing) {
                     Text(run.date, style: .time)
-                        .font(DS.Font.caption)
+                        .font(DS.Font.meta)
+                        .textCase(.uppercase)
                         .foregroundStyle(DS.Color.inkFaint)
                         .opacity(isHovering ? 0 : 1)
                     HStack(spacing: DS.Space.snug) {
