@@ -165,8 +165,11 @@ struct TranscriptionDetail: View {
                     dictionarySection
                 }
                 .padding(DS.Space.base)
-                .frame(maxWidth: 680, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: DS.Layout.detailMeasure, alignment: .leading)
+                // Centred, not leading: past the measure the column stops growing, and
+                // pinning it left banks every spare point into one dead gutter on the
+                // right — the thing that made a wide window look broken.
+                .frame(maxWidth: .infinity)
             }
             composer
         }

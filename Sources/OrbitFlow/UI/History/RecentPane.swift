@@ -17,23 +17,56 @@ struct RecentPane: View {
     @State private var selection: UUID?
     @FocusState private var isSearchFocused: Bool
 
+    /// How much of the list+detail pair the list takes. A fraction rather than a width,
+    /// so the panes keep their proportions when the rail collapses or the window resizes
+    /// — the two moments where a stored width made them sit still and look broken.
+    @AppStorage("recentListFraction") private var listFraction = DS.Layout.listFraction
+    /// The fraction at the moment a drag began. Drags report their total offset from the
+    /// start, so resolving against this rather than the live value keeps the divider
+    /// under the pointer instead of accelerating away from it.
+    @State private var fractionAtDragStart: Double?
+
     var body: some View {
-        HStack(spacing: 0) {
-            FilterRail(filter: $filter, counts: History.counts(for: items))
-                .layoutPriority(2)
-            Hairline(vertical: true)
-            SessionList(
-                items: visibleItems,
-                selection: $selection,
-                query: $query,
-                isSearchFocused: $isSearchFocused,
-                isHistoryEmpty: store.runs.isEmpty,
-                shortcutSummary: ShortcutKeys.displaySummary(settings.shortcutKeys)
-            )
-            .frame(width: 340)
-            .layoutPriority(1)
-            Hairline(vertical: true)
-            detail
+        // The width the panes divide has to be measured, because a fraction of nothing is
+        // nothing. The reader wraps only the row — the rail sizes itself.
+        GeometryReader { geometry in
+            let available = max(0, geometry.size.width - railWidth)
+            let listWidth = DS.Layout.listWidth(fraction: listFraction, available: available)
+
+            HStack(spacing: 0) {
+                FilterRail(filter: $filter, counts: History.counts(for: items), isOpen: $isRailOpen)
+                    .layoutPriority(2)
+                Hairline(vertical: true)
+                SessionList(
+                    items: visibleItems,
+                    selection: $selection,
+                    query: $query,
+                    isSearchFocused: $isSearchFocused,
+                    isHistoryEmpty: store.runs.isEmpty,
+                    shortcutSummary: ShortcutKeys.displaySummary(settings.shortcutKeys)
+                )
+                .frame(width: listWidth)
+                .layoutPriority(1)
+                PaneDivider(
+                    onDrag: { offset in
+                        let start = fractionAtDragStart ?? listFraction
+                        if fractionAtDragStart == nil { fractionAtDragStart = start }
+                        listFraction = DS.Layout.listFraction(
+                            forWidth: start * available + offset,
+                            available: available
+                        )
+                    },
+                    onCommit: { fractionAtDragStart = nil },
+                    onReset: {
+                        withAnimation(DS.Motion.panel) { listFraction = DS.Layout.listFraction }
+                    }
+                )
+                detail
+            }
+            // The rail toggling is an animated change of `available`, so the list and the
+            // detail grow together. Dragging is deliberately outside this: a divider that
+            // eases toward the pointer reads as lag, not as polish.
+            .animation(DS.Motion.panel, value: isRailOpen)
         }
         .background(DS.Color.canvas)
         .onChange(of: route.openRun) { _, opened in
@@ -61,6 +94,16 @@ struct RecentPane: View {
         }
     }
 
+    /// The rail's own collapsed flag, read here because the width it takes is what the
+    /// other two panes divide. `FilterRail` still owns the toggle; this is a binding to
+    /// the same stored preference rather than a second copy of the state.
+    @AppStorage("recentFilterRailOpen") private var isRailOpen = true
+
+    private var railWidth: CGFloat {
+        // Plus the hairline between the rail and the list, which is real layout width.
+        (isRailOpen ? DS.Layout.railOpen : DS.Layout.railClosed) + DS.Border.hairline
+    }
+
     @ViewBuilder
     private var detail: some View {
         if let selection, store.runs.contains(where: { $0.id == selection }) {
@@ -72,7 +115,7 @@ struct RecentPane: View {
             // of editor state — across every selection, which is how an edit to one
             // transcript could land on another.
             .id(selection)
-            .frame(minWidth: 360, maxWidth: .infinity)
+            .frame(minWidth: DS.Layout.detailMin, maxWidth: .infinity)
         } else {
             EmptyPanel(
                 label: store.runs.isEmpty ? "Nothing dictated yet" : "Nothing selected",
@@ -119,8 +162,10 @@ struct FilterRail: View {
     let counts: [HistoryFilter: Int]
 
     /// Collapsed state lives in defaults rather than in view state: a rail someone closed
-    /// should stay closed after a relaunch, and this is a preference, not a mode.
-    @AppStorage("recentFilterRailOpen") private var isOpen = true
+    /// should stay closed after a relaunch, and this is a preference, not a mode. The
+    /// binding is owned a level up, because the width this rail gives back is the width
+    /// the other two panes divide — one flag, read in both places.
+    @Binding var isOpen: Bool
 
     private struct Item {
         let filter: HistoryFilter
@@ -155,13 +200,12 @@ struct FilterRail: View {
                 .padding(DS.Space.roomy)
             }
         }
-        .frame(width: isOpen ? 200 : 52, alignment: .leading)
+        .frame(width: isOpen ? DS.Layout.railOpen : DS.Layout.railClosed, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.Color.surface)
         // Fixed, and it means it: without this the transcript's ideal width won the layout
         // and the rail was pushed off the left edge of the window.
         .fixedSize(horizontal: true, vertical: false)
-        .animation(DS.Motion.panel, value: isOpen)
     }
 
     private var toggle: some View {

@@ -40,6 +40,48 @@ struct Hairline: View {
     }
 }
 
+/// A `Hairline(vertical:)` you can drag.
+///
+/// Looks identical at rest — the same one-point line in the same colour — because a
+/// splitter that advertises itself with a grip or a thicker rule adds a piece of chrome
+/// to every screen to serve an adjustment made once. What it adds instead is a grab area
+/// wider than the line and a resize cursor, so it answers when the pointer arrives.
+///
+/// Reports drags in points. Whoever owns the layout decides what a point means.
+struct PaneDivider: View {
+    /// Called continuously while dragging, with the total offset from where the drag
+    /// began — not a per-frame delta, so a caller can clamp without accumulating error.
+    let onDrag: (CGFloat) -> Void
+    /// Called when the drag ends, to persist whatever the last offset produced.
+    var onCommit: () -> Void = {}
+    /// Double-click. The way back when the divider ends up somewhere useless.
+    var onReset: () -> Void = {}
+
+    var body: some View {
+        Hairline(vertical: true)
+            // The grab area is padding rather than a wider line: the hairline stays one
+            // point wide and the gesture gets `dividerGrab` to either side of it.
+            .padding(.horizontal, DS.Layout.dividerGrab)
+            .contentShape(.rect)
+            .onHover { inside in
+                // Push and pop rather than `set`: the cursor has to survive the pointer
+                // crossing the panes on either side, and only a push/pop pair restores
+                // whatever the text views underneath had asked for.
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { onDrag($0.translation.width) }
+                    .onEnded { _ in onCommit() }
+            )
+            .onTapGesture(count: 2) { onReset() }
+            .accessibilityLabel("Resize the list")
+            // Negative margin so the grab area overlaps the panes instead of pushing them
+            // apart: without this the divider would occupy 17 points of layout to draw one.
+            .padding(.horizontal, -DS.Layout.dividerGrab)
+    }
+}
+
 // MARK: - Labels
 
 /// A quiet interface label — section headings, field names, row metadata.

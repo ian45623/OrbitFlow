@@ -116,10 +116,19 @@ enum DS {
     /// Three roles, three faces, all bundled in `Contents/Resources/Fonts` and registered
     /// by `ATSApplicationFontsPath` in Info.plist.
     ///
-    /// **Newsreader** carries what the app produces: transcribed prose and the display
-    /// lines. **Instrument Sans** carries the interface around it. **JetBrains Mono**
-    /// carries instrumentation — timings, counts, statuses — which is why those read as
-    /// measurements rather than as more interface.
+    /// **Source Serif 4** carries what the app produces: transcribed prose and the
+    /// display lines. **Instrument Sans** carries the interface around it. **JetBrains
+    /// Mono** carries instrumentation — timings, counts, statuses — which is why those
+    /// read as measurements rather than as more interface.
+    ///
+    /// The serif is Source Serif rather than a finer text face because transcripts are
+    /// read in three-line previews at 15pt, where stroke contrast turns into mush. Its
+    /// x-height is ~11% taller than Newsreader's at the same size, so the same point
+    /// value reads noticeably larger.
+    ///
+    /// All three are variable fonts. macOS resolves the optical-size axis against the
+    /// point size on its own, so `face` sets no variation — asking for 15pt already
+    /// gets the 15pt drawing.
     ///
     /// Every role falls back to the system face it replaced, so a bundle built without the
     /// font files still renders: `custom(_:size:)` resolves to the system font when the
@@ -127,7 +136,7 @@ enum DS {
     enum Font {
         /// Family names as CoreText reports them.
         private static let ui = "Instrument Sans"
-        private static let serif = "Newsreader"
+        private static let serif = "Source Serif 4"
         private static let mono = "JetBrains Mono"
 
         /// `Font.custom` silently falls back to the system face, but loses `design`, so the
@@ -165,7 +174,7 @@ enum DS {
 
         // Content
         /// Transcribed text. Set like writing, because it is.
-        static let prose = face(serif, 14, fallback: .serif)
+        static let prose = face(serif, 15, fallback: .serif)
         /// A short serif line for empty states and sheet titles.
         static let display = face(serif, 17, fallback: .serif)
         /// The one headline size in the app — onboarding's "Talk instead of type."
@@ -177,8 +186,10 @@ enum DS {
         /// The elapsed counter while recording.
         static let counter = face(mono, 15, fallback: .monospaced).monospacedDigit()
 
-        /// Leading added to prose. Serif body wants more air than the sans.
-        static let proseLeading: CGFloat = 4
+        /// Leading added to prose. Serif body wants more air than the sans, and a
+        /// three-line preview wants it most — without this the lines knit together and
+        /// the row reads as a block rather than as sentences.
+        static let proseLeading: CGFloat = 6
         /// Longest comfortable transcript line before it should wrap.
         static let proseMeasure: CGFloat = 620
     }
@@ -194,6 +205,56 @@ enum DS {
         static let roomy: CGFloat = 16
         static let wide: CGFloat = 24
         static let panel: CGFloat = 36
+    }
+
+    // MARK: - Layout
+
+    /// Pane geometry for the Recent tab's three columns.
+    ///
+    /// The list's width is a *fraction* of the space the list and detail share, not a
+    /// point value. One number then answers three questions that used to disagree:
+    /// dragging the divider sets it, collapsing the rail widens the space it divides, and
+    /// resizing the window does the same. A stored point width answers only the first,
+    /// which is why the panes used to sit still while everything around them moved.
+    enum Layout {
+        /// The filter rail, labels showing.
+        static let railOpen: CGFloat = 200
+        /// The filter rail as a strip of icons. Still clickable, which is the point.
+        static let railClosed: CGFloat = 52
+
+        /// Narrowest useful list: below this the time, the latency and the status badge
+        /// stop fitting on one line and the row header wraps.
+        static let listMin: CGFloat = 320
+        /// Widest useful list. A three-line preview past this is a paragraph, and the
+        /// list's job is to be scanned, not read.
+        static let listMax: CGFloat = 560
+        /// The list's share of the list+detail pair before anyone drags it.
+        static let listFraction: Double = 0.36
+
+        /// The detail keeps this much even when the list is dragged wide.
+        static let detailMin: CGFloat = 360
+        /// Longest line of transcript in the detail. Rule 2's measure, in points.
+        static let detailMeasure: CGFloat = 680
+
+        /// The divider's grab area. The line itself is one point; one point is not a
+        /// target, so the gesture gets this much to either side.
+        static let dividerGrab: CGFloat = 8
+
+        /// The list's width for a stored fraction and the space the two panes share.
+        ///
+        /// Clamped twice over: once to the list's own readable range, and once to
+        /// whatever is left after the detail takes its minimum — so dragging the divider
+        /// to the far right stops at a usable detail rather than crushing it.
+        static func listWidth(fraction: Double, available: CGFloat) -> CGFloat {
+            let ceiling = max(listMin, min(listMax, available - detailMin))
+            return min(max(fraction * available, listMin), ceiling)
+        }
+
+        /// The fraction that puts the list at `width`, for writing a drag back to storage.
+        static func listFraction(forWidth width: CGFloat, available: CGFloat) -> Double {
+            guard available > 0 else { return listFraction }
+            return Double(listWidth(fraction: width / available, available: available) / available)
+        }
     }
 
     // MARK: - Radius
