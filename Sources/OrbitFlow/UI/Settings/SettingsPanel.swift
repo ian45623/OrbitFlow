@@ -4,6 +4,7 @@ import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 import OrbitFlowAIRewrite
+import OrbitFlowHistory
 import OrbitFlowHotkey
 import OrbitFlowStats
 
@@ -401,19 +402,24 @@ struct SettingsPanel: View {
 
             SettingsRow(
                 label: "Auto-delete",
-                help: "Trim the oldest dictations as new ones arrive."
+                help: "Trim history as new dictations arrive."
             ) {
-                Toggle("", isOn: autoDeleteBinding)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
+                Picker("", selection: historyModeBinding) {
+                    ForEach(HistoryRetentionMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
             } detail: {
-                note("Off by default. Nothing is deleted until you turn this on, and what "
-                    + "goes is gone — there is no trash to recover it from.")
+                note("By count or by age, never both — one rule, so there's no question "
+                    + "which one deleted something. Off by default, and what goes is gone: "
+                    + "there is no trash to recover it from.")
             }
 
-            if settings.historyLimit > 0 {
+            if settings.historyMode != .off {
                 Hairline()
-                historyLimitRow
+                if settings.historyMode == .count { historyLimitRow } else { historyDaysRow }
                 Hairline()
 
                 SettingsRow(
@@ -1318,10 +1324,11 @@ struct SettingsPanel: View {
                 Slider(
                     value: Binding(
                         get: { Double(settings.historyLimit) },
-                        set: { settings.historyLimit = Int($0) }
+                        // Rounded here rather than with `step:`, which would draw 390 tick
+                        // marks under the track — they merge into one solid line.
+                        set: { settings.historyLimit = Self.roundedLimit($0) }
                     ),
-                    in: Self.historyLimitBounds,
-                    step: Double(Settings.historyLimitStep)
+                    in: Self.historyLimitBounds
                 ) { editing in
                     // On commit only. Trimming on every frame of a drag would rewrite the
                     // whole log a hundred times on the way to the number you wanted.
@@ -1330,7 +1337,11 @@ struct SettingsPanel: View {
                 .tint(DS.Color.ink)
                 .frame(maxWidth: 260)
 
-                MetaLabel(text: "\(settings.historyLimit)", color: DS.Color.ink, reserving: 4)
+                MetaLabel(
+                    text: "\(settings.historyLimit) dictations",
+                    color: DS.Color.ink,
+                    reserving: 15
+                )
             }
         } detail: {
             note("Counted from the newest. Once history passes this, the oldest are deleted "
@@ -1338,15 +1349,76 @@ struct SettingsPanel: View {
         }
     }
 
-    /// Auto-delete is the limit being non-zero, so the switch writes the number rather than
-    /// a second stored flag that could disagree with it. Switching on restores nothing —
-    /// it starts at the default, because the previous limit was rejected by turning it off.
-    private var autoDeleteBinding: Binding<Bool> {
+    /// The window slider. Eight stops rather than a free run of days: the presets are the
+    /// windows anyone actually wants, and a linear day slider would bury everything from a
+    /// week to three months in the first tenth of its travel.
+    ///
+    /// It slides over *indices* into the presets, which is what makes the stops evenly
+    /// spaced on screen while the values they carry keep doubling.
+    private var historyDaysRow: some View {
+        SettingsRow(
+            label: "Keep for",
+            help: "How far back history reaches."
+        ) {
+            HStack(spacing: DS.Space.base) {
+                Slider(
+                    value: Binding(
+                        get: { Double(Self.presetIndex(of: settings.historyDays)) },
+                        set: { settings.historyDays = Self.preset(at: Int($0.rounded())) }
+                    ),
+                    in: 0...Double(RetentionRule.dayPresets.count - 1),
+                    step: 1
+                ) { editing in
+                    if !editing { RunLog.enforceRetention() }
+                }
+                .tint(DS.Color.ink)
+                .frame(maxWidth: 260)
+
+                MetaLabel(
+                    text: RetentionRule.dayLabel(settings.historyDays),
+                    color: DS.Color.ink,
+                    reserving: 8
+                )
+            }
+        } detail: {
+            note("Counted from when each dictation was recorded. Anything older than the "
+                + "window is deleted as each new dictation arrives.")
+        }
+    }
+
+    /// Nearest multiple of the step, clamped to the slider's own bounds so a drag to the
+    /// end lands on 2000 rather than on 1998.
+    private static func roundedLimit(_ value: Double) -> Int {
+        let step = Double(Settings.historyLimitStep)
+        let rounded = Int((value / step).rounded() * step)
+        return min(max(rounded, Settings.historyLimitRange.lowerBound),
+                   Settings.historyLimitRange.upperBound)
+    }
+
+    /// Where a stored window sits on the slider. A value that isn't a preset — an older
+    /// build's, or a hand-edited default — takes the nearest stop rather than snapping to
+    /// the start and quietly shortening the user's window.
+    private static func presetIndex(of days: Int) -> Int {
+        let presets = RetentionRule.dayPresets
+        let nearest = presets.enumerated().min {
+            abs($0.element - days) < abs($1.element - days)
+        }
+        return nearest?.offset ?? 0
+    }
+
+    private static func preset(at index: Int) -> Int {
+        let presets = RetentionRule.dayPresets
+        return presets[min(max(index, 0), presets.count - 1)]
+    }
+
+    /// Switching modes trims immediately against the new rule — a setting that waits until
+    /// the next dictation to mean anything is worse than one that bites.
+    private var historyModeBinding: Binding<HistoryRetentionMode> {
         Binding(
-            get: { settings.historyLimit > 0 },
-            set: { isOn in
-                settings.historyLimit = isOn ? Settings.defaultHistoryLimit : 0
-                if isOn { RunLog.enforceRetention() }
+            get: { settings.historyMode },
+            set: { mode in
+                settings.historyMode = mode
+                if mode != .off { RunLog.enforceRetention() }
             }
         )
     }

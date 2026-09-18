@@ -40,11 +40,43 @@ public struct RetentionPolicy: Sendable, Equatable {
 }
 
 extension History {
+    /// Which dictations the rule has let go of. The newest, or the most recent, survive.
+    ///
+    /// A count below one and a window below a day both mean "keep everything", not "delete
+    /// everything" — the panel spells off as its own case, and of the two readings of a
+    /// zero that arrives anyway, only one of them is recoverable.
+    ///
+    /// With `keepsPinned`, pinned dictations are lifted out before anything is counted or
+    /// dated, so they neither expire nor push an unpinned dictation over the edge. Fifty
+    /// pinned under a count of 250 keeps 300, which is the only reading where pinning
+    /// something can't silently evict something else.
     public static func expired(
         from items: [HistoryItem],
         policy: RetentionPolicy,
         now: Date = Date()
     ) -> Set<UUID> {
-        []
+        let counted = policy.keepsPinned ? items.filter { !$0.isPinned } : items
+
+        switch policy.rule {
+        case .keepEverything:
+            return []
+
+        case .newest(let count):
+            guard count > 0, counted.count > count else { return [] }
+            // The id breaks ties: `sorted(by:)` is not a stable sort, and two dictations
+            // recorded in the same instant must not expire differently between two runs
+            // over the same history.
+            let newestFirst = counted.sorted {
+                $0.date == $1.date ? $0.id.uuidString > $1.id.uuidString : $0.date > $1.date
+            }
+            return Set(newestFirst.dropFirst(count).map(\.id))
+
+        case .within(let days):
+            guard days > 0 else { return [] }
+            // Strictly older than the window. A dictation sitting exactly on the boundary
+            // is kept, the same way an exactly-ten-minute gap continues a session.
+            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+            return Set(counted.filter { $0.date < cutoff }.map(\.id))
+        }
     }
 }
