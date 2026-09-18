@@ -47,6 +47,11 @@ struct OrbitFlowApp: App {
             OnboardingWindow(controller: delegate.controller)
         }
         .windowResizability(.contentSize)
+        // macOS reopens windows that were open at quit, which for a setup window means
+        // greeting someone who finished setup last week. Whether it should appear is a
+        // question about permissions, asked at launch — never a question about what
+        // happened to be on screen when the app last quit.
+        .restorationBehavior(.disabled)
 
         Window("Engine comparison", id: "comparison") {
             ComparisonWindow(controller: delegate.controller)
@@ -158,6 +163,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         observeState()
+        // Both grants, at launch, in one line. "It keeps asking for permission" and "the
+        // hotkey does nothing" are the same two bits from the outside, and this is the
+        // cheapest way to tell which is actually missing.
+        Log.app.info("""
+            permissions — accessibility: \(Permissions.hasAccessibility, privacy: .public), \
+            microphone: \(Permissions.hasMicrophone, privacy: .public), \
+            onboarding completed: \(Settings.shared.onboardingCompleted, privacy: .public)
+            """)
         Log.app.info("Orbit Flow ready — hold \(ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)) to dictate")
     }
 

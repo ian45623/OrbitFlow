@@ -29,6 +29,15 @@ struct OnboardingWindow: View {
         .frame(width: 720, height: 620, alignment: .topLeading)
         .background(DS.Color.canvas)
         .onAppear {
+            // macOS brings this window back at launch if it was open when the app quit, and
+            // `restorationBehavior(.disabled)` on the scene doesn't stop it. Rather than
+            // greeting someone who finished setup last week, the window closes itself:
+            // it exists only while something needs setting up. "Run setup again" clears
+            // `onboardingCompleted` first, so that route still opens it.
+            guard AppDelegate.wantsOnboarding else {
+                dismiss()
+                return
+            }
             model.startWatching(controller: controller)
             runCountAtOpen = runs.runs.count
         }

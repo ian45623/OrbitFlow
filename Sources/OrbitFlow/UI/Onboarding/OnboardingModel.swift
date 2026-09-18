@@ -147,18 +147,25 @@ final class OnboardingModel {
     }
 
     /// TCC has no notification for a grant, so the only way to notice one is to look.
-    /// Runs while the window is open and stops with it.
+    ///
+    /// Stops as soon as both grants are in and the tap is live: `AXIsProcessTrusted()` is
+    /// an IPC to the TCC daemon, and a window left open on the last step would otherwise
+    /// make that call once a second for as long as it stayed open.
     func startWatching(controller: DictationController) {
         guard poll == nil else { return }
         poll = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
+                if Permissions.hasAccessibility, Permissions.hasMicrophone, controller.isHotkeyArmed {
+                    self.stopWatching()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
                 if Permissions.hasAccessibility, !controller.isHotkeyArmed {
                     _ = controller.reloadHotkey()
                     self.advance(from: .accessibility)
                 }
-                // Reading these keeps the window's observation of them live.
+                // Reading this keeps the window's observation of it live.
                 _ = Permissions.hasMicrophone
             }
         }
