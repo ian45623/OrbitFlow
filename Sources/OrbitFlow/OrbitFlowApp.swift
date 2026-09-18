@@ -11,7 +11,11 @@ struct OrbitFlowApp: App {
         // The main window. A `Window` rather than a `WindowGroup`: this app has one front
         // panel, and letting ⌘N spawn a second copy of a tape deck makes no sense.
         Window("Orbit Flow", id: "main") {
-            MainWindow(controller: delegate.controller)
+            // Wrapped rather than opened from the delegate: a SwiftUI `Window` scene has no
+            // `NSWindow` until something opens it, and `openWindow` only exists inside a
+            // view. The main window is the one scene macOS opens by itself at launch, so it
+            // is where the decision to show onboarding instead can be acted on.
+            RootWindow(controller: delegate.controller)
         }
         .defaultSize(width: 860, height: 620)
         .windowResizability(.contentMinSize)
@@ -37,11 +41,40 @@ struct OrbitFlowApp: App {
             Image(nsImage: Self.menuBarIcon)
         }
 
+        // Sized by its content and not resizable: it is a sequence of steps, not a
+        // surface anyone works in.
+        Window("Set up Orbit Flow", id: "onboarding") {
+            OnboardingWindow(controller: delegate.controller)
+        }
+        .windowResizability(.contentSize)
+
         Window("Engine comparison", id: "comparison") {
             ComparisonWindow(controller: delegate.controller)
         }
         .defaultSize(width: 640, height: 560)
         .windowResizability(.contentMinSize)
+    }
+
+    /// The main window, plus the one thing that has to happen once at launch from inside a
+    /// view: opening onboarding.
+    private struct RootWindow: View {
+        @Bindable var controller: DictationController
+        @Environment(\.openWindow) private var openWindow
+
+        var body: some View {
+            MainWindow(controller: controller)
+                .task {
+                    guard AppDelegate.wantsOnboarding else { return }
+                    openWindow(id: "onboarding")
+                    NSApp.activate(ignoringOtherApps: true)
+                    // A first-run greeting shouldn't arrive stacked on top of a window full
+                    // of empty history. Someone returning because a permission broke keeps
+                    // theirs — they were already using the app.
+                    if !Settings.shared.onboardingCompleted {
+                        NSApp.windows.first { $0.title == "Orbit Flow" }?.close()
+                    }
+                }
+        }
     }
 
     /// The app's own icon, scaled to menu-bar height. Read through LaunchServices rather
@@ -84,7 +117,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Only prompt when we're actually untrusted. A tap can fail to be created for
             // other reasons, and showing the grant dialog to someone who already granted it
             // is how an app earns a reputation for asking forever.
-            if !Permissions.hasAccessibility { Permissions.promptForAccessibility() }
+            //
+            // Onboarding owns this prompt when it's going to show: its Accessibility step
+            // explains what the grant is for before macOS asks, which is the entire reason
+            // that window exists.
+            if !Permissions.hasAccessibility, !Self.wantsOnboarding {
+                Permissions.promptForAccessibility()
+            }
             // The tap can only be created once the user grants Accessibility, and there's
             // no notification for that — poll until it takes.
             retryActivation()
@@ -154,6 +193,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func showMainWindow() {
         showWindow(titled: "Orbit Flow")
+    }
+
+    /// First launch always, and afterwards only when something it set up has come undone
+    /// — a TCC grant reset by an update, or a permission switched off by hand.
+    static var wantsOnboarding: Bool {
+        if !Settings.shared.onboardingCompleted { return true }
+        return !Permissions.hasAccessibility || !Permissions.hasMicrophone
     }
 
     static func showComparisonWindow() {
@@ -270,6 +316,13 @@ private struct MenuContent: View {
         Button("Open Orbit Flow") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        if !Permissions.hasAccessibility || !Permissions.hasMicrophone || !settings.onboardingCompleted {
+            Button("Set up Orbit Flow…") {
+                openWindow(id: "onboarding")
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
 
         Button("Show comparison window") {

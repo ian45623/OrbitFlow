@@ -122,19 +122,19 @@ struct MetaLabel: View {
 /// The state disc is the only place `positive` and `caution` appear in a row, and it is
 /// never the only signal: the meta slot says the same thing in words, because hue doesn't
 /// carry state on its own (rule 1).
-struct StepRow<Content: View>: View {
-    enum State {
-        /// Not reached yet, or nothing to do.
-        case waiting
-        /// Done — a permission granted, a key chosen.
-        case done
-        /// Needs the user before it works.
-        case needsYou
-    }
+enum StepState {
+    /// Not reached yet, or nothing to do.
+    case waiting
+    /// Done — a permission granted, a key chosen.
+    case done
+    /// Needs the user before it works.
+    case needsYou
+}
 
+struct StepRow<Content: View>: View {
     let title: String
     let description: String
-    var state: State = .waiting
+    var state: StepState = .waiting
     var meta: String?
     var metaReserving: Int?
     var isExpanded = false
@@ -215,7 +215,7 @@ extension StepRow where Content == EmptyView {
     init(
         title: String,
         description: String,
-        state: State = .waiting,
+        state: StepState = .waiting,
         meta: String? = nil,
         metaReserving: Int? = nil
     ) {

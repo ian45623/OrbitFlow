@@ -287,7 +287,7 @@ enum DS {
 
 // MARK: - Hex helpers
 
-private extension NSColor {
+extension NSColor {
     convenience init(hex: UInt32) {
         self.init(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,

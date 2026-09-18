@@ -123,6 +123,13 @@ final class Settings {
         didSet { defaults.set(autoUpdate, forKey: Keys.autoUpdate) }
     }
 
+    /// The user has been through onboarding — finished it or skipped it. Onboarding still
+    /// reopens on a later launch if a permission has gone missing, so this records "don't
+    /// greet me again", not "setup is complete".
+    var onboardingCompleted: Bool {
+        didSet { defaults.set(onboardingCompleted, forKey: Keys.onboardingCompleted) }
+    }
+
     /// Run the cleanup pass before injecting. Off = raw engine output.
     var cleanupEnabled: Bool {
         didSet { defaults.set(cleanupEnabled, forKey: Keys.cleanupEnabled) }
@@ -260,6 +267,7 @@ final class Settings {
         static let rewriteMode = "rewriteMode"
         static let compareMode = "compareMode"
         static let autoUpdate = "autoUpdate"
+        static let onboardingCompleted = "onboardingCompleted"
         static let hudSize = "hudSize"
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
@@ -321,6 +329,7 @@ final class Settings {
         ) ?? .faithful
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         autoUpdate = defaults.object(forKey: Keys.autoUpdate) as? Bool ?? false
+        onboardingCompleted = defaults.bool(forKey: Keys.onboardingCompleted)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
         readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false

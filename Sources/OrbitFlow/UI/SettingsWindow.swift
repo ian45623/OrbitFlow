@@ -43,12 +43,9 @@ struct SettingsPanel: View {
     @State private var updater = Updater.shared
     @State private var isConfirmingRemove = false
 
-    /// Shortcut recording: the local key monitor while it's live, the modifier pressed on
-    /// its own so far (committed on release unless a key joins it), and why the last
-    /// attempt was refused.
-    @State private var recordMonitor: Any?
-    @State private var pendingModifier: Int64?
-    @State private var recordProblem: String?
+    /// Shortcut recording. The capture itself lives in `ShortcutRecorder`, shared with
+    /// onboarding; this screen only says what to do with the key that comes back.
+    @State private var recorder = ShortcutRecorder()
 
     /// `SMAppService` is the store for this — there is no mirrored bool in `Settings`,
     /// so the switch can never disagree with System Settings ▸ General ▸ Login Items.
@@ -336,82 +333,31 @@ struct SettingsPanel: View {
                 }
             }
 
-            if recordMonitor != nil {
+            if recorder.isRecording {
                 HStack {
                     Text("Press a key or combination…")
                         .font(DS.Font.body)
                         .foregroundStyle(DS.Color.inkMuted)
                     Spacer()
-                    ActionButton(title: "Cancel", kind: .quiet) { stopRecording() }
+                    ActionButton(title: "Cancel", kind: .quiet) { recorder.stop(resuming: controller) }
                 }
                 .padding(DS.Space.snug)
                 .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
 
-                if let recordProblem {
-                    Text(recordProblem)
+                if let problem = recorder.problem {
+                    Text(problem)
                         .font(DS.Font.caption)
                         .foregroundStyle(DS.Color.caution)
                 }
             } else {
                 ActionButton(title: "Record shortcut", systemImage: "plus", kind: .quiet) {
-                    startRecording()
+                    recorder.start(pausing: controller) { key in
+                        settings.shortcutKeys = ShortcutKeys.adding(key, to: settings.shortcutKeys)
+                    }
                 }
             }
         }
-        .onDisappear { stopRecording() }
-    }
-
-    /// Captures the next key press in this window. The event tap is paused meanwhile, both
-    /// so the current shortcuts don't start dictating and because the tap would swallow
-    /// Right ⌥ and Right ⌘ before this monitor ever saw them.
-    private func startRecording() {
-        guard recordMonitor == nil else { return }
-        controller.pauseHotkey()
-        recordProblem = nil
-        recordMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            guard let flags = event.cgEvent?.flags else { return nil }
-            let keyCode = Int64(event.keyCode)
-
-            if event.type == .flagsChanged {
-                let key = Shortcut(keyCode: keyCode)
-                // Caps Lock has no hold state to read; commit it so the refusal shows.
-                guard let flag = key.deviceFlag else {
-                    commit(key)
-                    return nil
-                }
-                if flags.contains(flag) {
-                    pendingModifier = keyCode
-                } else if pendingModifier == keyCode {
-                    commit(key)
-                }
-                return nil
-            }
-
-            pendingModifier = nil
-            if keyCode == Int64(kVK_Escape), flags.intersection(Shortcut.modifierMask).isEmpty {
-                stopRecording()
-                return nil
-            }
-            commit(Shortcut(keyCode: keyCode, modifiers: flags, characters: event.charactersIgnoringModifiers))
-            return nil
-        }
-    }
-
-    private func commit(_ key: Shortcut) {
-        if let problem = key.problem {
-            recordProblem = problem
-            return
-        }
-        settings.shortcutKeys = ShortcutKeys.adding(key, to: settings.shortcutKeys)
-        stopRecording()
-    }
-
-    private func stopRecording() {
-        guard let recordMonitor else { return }
-        NSEvent.removeMonitor(recordMonitor)
-        self.recordMonitor = nil
-        pendingModifier = nil
-        controller.reloadHotkey()
+        .onDisappear { recorder.stop(resuming: controller) }
     }
 
     private var readAloudGroup: some View {
