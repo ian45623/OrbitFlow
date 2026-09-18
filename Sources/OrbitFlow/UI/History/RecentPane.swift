@@ -49,8 +49,6 @@ struct RecentPane: View {
             Group {
                 Button("") { isSearchFocused = true }
                     .keyboardShortcut("f", modifiers: .command)
-                Button("") { copySelection() }
-                    .keyboardShortcut(.return, modifiers: .command)
                 Button("") { rewriteSelection() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
             }
@@ -104,12 +102,6 @@ struct RecentPane: View {
         return matching.sorted { $0.date > $1.date }
     }
 
-    private func copySelection() {
-        guard let selection, let run = store.runs.first(where: { $0.id == selection }) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(run.text, forType: .string)
-    }
-
     private func rewriteSelection() {
         guard let selection else { return }
         route.openRun = selection
@@ -122,20 +114,27 @@ struct FilterRail: View {
     @Binding var filter: HistoryFilter
     let counts: [HistoryFilter: Int]
 
+    /// Collapsed state lives in defaults rather than in view state: a rail someone closed
+    /// should stay closed after a relaunch, and this is a preference, not a mode.
+    @AppStorage("recentFilterRailOpen") private var isOpen = true
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             heading("View")
-            row(.everything, "Everything")
-            row(.pinned, "Pinned")
-            row(.rewritten, "Rewritten")
-            row(.corrected, "Corrected")
-            row(.longForm, "Long form")
+
+            if isOpen {
+                row(.everything, "Everything", icon: "tray.full")
+                row(.pinned, "Pinned", icon: "pin")
+                row(.rewritten, "Rewritten", icon: "wand.and.sparkles")
+                row(.corrected, "Corrected", icon: "character.cursor.ibeam")
+                row(.longForm, "Long form", icon: "text.alignleft")
+            }
 
             Spacer()
 
             VStack(alignment: .leading, spacing: DS.Space.tight) {
                 MetaLabel(text: "⌘F  Search")
-                MetaLabel(text: "⌘⏎  Copy")
+                MetaLabel(text: "⌘C  Copy")
                 MetaLabel(text: "⌘⌥R  Rewrite")
             }
             .padding(DS.Space.roomy)
@@ -149,17 +148,34 @@ struct FilterRail: View {
     }
 
     private func heading(_ text: String) -> some View {
-        MetaLabel(text: text)
-            .padding(.horizontal, DS.Space.roomy)
-            .padding(.top, DS.Space.roomy)
-            .padding(.bottom, DS.Space.snug)
+        Button {
+            withAnimation(DS.Motion.panel) { isOpen.toggle() }
+        } label: {
+            HStack(spacing: DS.Space.tight) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(DS.Color.inkFaint)
+                MetaLabel(text: text)
+                Spacer()
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(isOpen ? "Hide the filters" : "Show the filters")
+        .padding(.horizontal, DS.Space.roomy)
+        .padding(.top, DS.Space.roomy)
+        .padding(.bottom, DS.Space.snug)
     }
 
-    private func row(_ candidate: HistoryFilter, _ label: String) -> some View {
+    private func row(_ candidate: HistoryFilter, _ label: String, icon: String) -> some View {
         Button {
             filter = candidate
         } label: {
             HStack(spacing: DS.Space.snug) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(filter == candidate ? DS.Color.ink : DS.Color.inkMuted)
+                    .frame(width: 16)
                 Text(label)
                     .font(filter == candidate ? DS.Font.bodyEmphasis : DS.Font.body)
                     .foregroundStyle(DS.Color.ink)

@@ -18,9 +18,10 @@ struct OrbitFlowApp: App {
             RootWindow(controller: delegate.controller)
         }
         // Recent needs room for three panes — 200 for the rail and 340 for the list before
-        // the transcript starts. At the old 860 the reading pane was the narrowest of the
-        // three, which is backwards.
-        .defaultSize(width: 1080, height: 680)
+        // the transcript starts — and the transcript pane has a composer pinned under it,
+        // so height is as load-bearing as width. Opening smaller than this means the first
+        // thing anyone does is resize the window.
+        .defaultSize(width: 1180, height: 820)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}

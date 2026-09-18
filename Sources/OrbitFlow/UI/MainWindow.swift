@@ -44,7 +44,9 @@ struct MainWindow: View {
             }
         }
         .background(DS.Color.canvas)
-        .frame(minWidth: 940, minHeight: 560)
+        // The floor, not the shape: full screen or anything larger is the user's business,
+        // but below this the three panes start clipping each other.
+        .frame(minWidth: 940, minHeight: 640)
     }
 }
 

@@ -33,9 +33,13 @@ struct TranscriptionDetail: View {
     /// Runs that haven't landed yet, newest first. Successful ones move to the stored list.
     @State private var pending: [Version] = []
     @State private var selected: UUID?
-    /// The transcript is read by default and edited on request: correcting a misheard word
-    /// is rare, and a text box where a paragraph should be reads as a form to fill in.
-    @State private var isEditing = false
+    /// The entry being edited, if any. Every version is editable — a rewrite is a draft
+    /// like any other, and the one thing you want after reading one is to change a word.
+    /// Read by default: a text box where a paragraph should be reads as a form to fill in.
+    @State private var editingID: UUID?
+    /// What the open editor holds, and what it held when it opened.
+    @State private var draft = ""
+    @State private var draftOrigin = ""
     @State private var engine: Engine = .cloud
     /// Read once rather than per redraw: this is a file read, not a property.
     @State private var hasKey = false
@@ -167,6 +171,15 @@ struct TranscriptionDetail: View {
             composer
         }
         .background(DS.Color.canvas)
+        .background {
+            if editingID == nil {
+                Button("") { copy(sourceText) }
+                    .keyboardShortcut("c", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+            }
+        }
         // Keyed on the run: this view stays on screen in Recent while the selection changes
         // under it, and a plain `.task` would only ever run for the first run shown —
         // leaving the editor holding the previous transcript, which `saveCorrection()` would
@@ -175,7 +188,7 @@ struct TranscriptionDetail: View {
             pending = []
             selected = nil
             instruction = ""
-            isEditing = false
+            editingID = nil
             hasKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""
@@ -278,13 +291,20 @@ struct TranscriptionDetail: View {
                 if isSource {
                     MetaLabel(text: "Rewriting from this")
                 }
-                if entry.kind == .spoken {
-                    ActionButton(title: isEditing ? "Done" : "Edit", kind: .quiet) {
-                        if isEditing, source != savedSource { saveCorrection() }
-                        withAnimation(DS.Motion.panel) { isEditing.toggle() }
+                if editingID == entry.id {
+                    ActionButton(title: "Save", kind: .quiet) { saveEdit(of: entry) }
+                    ActionButton(title: "Cancel", kind: .quiet) {
+                        withAnimation(DS.Motion.panel) { editingID = nil }
+                    }
+                } else {
+                    IconButton(systemImage: "pencil", label: "Edit this version") {
+                        draft = entry.text ?? ""
+                        draftOrigin = draft
+                        selected = entry.id
+                        withAnimation(DS.Motion.panel) { editingID = entry.id }
                     }
                 }
-                if let text = entry.text {
+                if let text = entry.text, editingID != entry.id {
                     IconButton(systemImage: "doc.on.doc", label: "Copy this version") { copy(text) }
                 }
                 if entry.kind == .rewrite {
@@ -294,9 +314,11 @@ struct TranscriptionDetail: View {
                 }
             }
 
-            if entry.kind == .spoken, isEditing {
-                ProseEditor(text: $source, minHeight: 120)
-                Text("Fix a misheard word here, then rewrite from the corrected text.")
+            if editingID == entry.id {
+                ProseEditor(text: $draft, minHeight: 120)
+                Text(entry.kind == .spoken
+                    ? "Fix a misheard word here, then rewrite from the corrected text."
+                    : "Edit this version. Rewrites run from whichever version is selected.")
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.inkFaint)
             } else if let failure = entry.failure {
@@ -308,7 +330,6 @@ struct TranscriptionDetail: View {
                     .font(entry.kind == .rewrite ? DS.Font.prose : DS.Font.display)
                     .lineSpacing(DS.Font.proseLeading)
                     .foregroundStyle(DS.Color.ink)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -402,6 +423,38 @@ struct TranscriptionDetail: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.surface)
         .overlay(alignment: .top) { Hairline() }
+    }
+
+    /// Writes the open editor back to whichever version it belongs to.
+    ///
+    /// Three destinations, because the three kinds are stored differently: the transcript
+    /// is the run's own text (or its `original` when cleanup produced a second copy), the
+    /// landed version is that cleaned text, and a rewrite lives in the run's rewrite list.
+    private func saveEdit(of entry: Entry) {
+        let edited = draft
+        switch entry.kind {
+        case .spoken:
+            source = edited
+            saveCorrection()
+        case .landed:
+            RunLog.modify(runID) { $0.text = edited }
+        case .rewrite:
+            RunLog.modify(runID) { run in
+                guard let index = run.rewrites?.firstIndex(where: { $0.id == entry.id }) else { return }
+                let old = run.rewrites![index]
+                // `Rewrite` is immutable by design — replaced rather than mutated, so the
+                // stored shape stays the one the log was written with.
+                run.rewrites![index] = Rewrite(
+                    id: old.id,
+                    date: old.date,
+                    instruction: old.instruction,
+                    engine: old.engine,
+                    source: old.source,
+                    text: edited
+                )
+            }
+        }
+        withAnimation(DS.Motion.panel) { editingID = nil }
     }
 
     private func copy(_ text: String) {
