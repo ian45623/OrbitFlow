@@ -81,7 +81,9 @@ struct TranscriptionDetail: View {
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""
             savedSource = source
+            runRequestedRewrite()
         }
+        .onChange(of: MainRoute.shared.rewriteRequest) { runRequestedRewrite() }
     }
 
     // MARK: - Header
@@ -110,7 +112,17 @@ struct TranscriptionDetail: View {
                         speaker.speak(spoken)
                     }
                 }
-                MetaLabel(text: "\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
+                ActionButton(
+                    title: (run.isPinned ?? false) ? "Unpin" : "Pin",
+                    kind: .quiet
+                ) {
+                    RunLog.modify(run.id) { $0.isPinned = !($0.isPinned ?? false) }
+                }
+                MetaLabel(text: [
+                    run.engine,
+                    run.date.formatted(.dateTime.month().day().hour().minute()),
+                    run.destinationApp.map { "landed in \($0)" },
+                ].compactMap { $0 }.joined(separator: " · "))
             }
         }
         .padding(.horizontal, DS.Space.base)
@@ -406,6 +418,14 @@ struct TranscriptionDetail: View {
         // design, and unlike dictation nothing here is typed into another app — the user
         // reads the result and decides whether to copy it.
         start(label: typed, system: RewriteMode.customSystemPrompt(typed), checking: nil)
+    }
+
+    /// ⌘⌥R in Recent asks for a rewrite without opening the page first. Consumed once —
+    /// leaving it set would rerun on every redraw.
+    private func runRequestedRewrite() {
+        guard MainRoute.shared.rewriteRequest == runID else { return }
+        MainRoute.shared.rewriteRequest = nil
+        start(settings.rewriteMode)
     }
 
     private func start(_ mode: RewriteMode) {

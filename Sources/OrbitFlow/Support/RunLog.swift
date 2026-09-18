@@ -52,6 +52,18 @@ struct DictationRun: Codable, Sendable, Identifiable {
     /// `corrections`.
     var rewrites: [Rewrite]?
 
+    /// The app the text landed in, and its bundle identifier. Captured when the key goes
+    /// down rather than at insertion: a cloud rewrite can take seconds, and by the time the
+    /// text lands the user may have moved on to another window.
+    ///
+    /// Optional for backwards compatibility, like `corrections` — runs recorded before this
+    /// existed group under "Unknown" rather than disappearing from a filter.
+    var destinationApp: String?
+    var destinationBundleID: String?
+
+    /// Kept deliberately, so it survives a "delete all" prompt's twin: the filter rail.
+    var isPinned: Bool?
+
     /// The transcript as the engine heard it, kept only when cleanup actually changed it,
     /// so history can show the rewrite next to what was really said. Optional for the same
     /// backwards-compatibility reason as `corrections`.
@@ -70,7 +82,10 @@ struct DictationRun: Codable, Sendable, Identifiable {
         group: String? = nil,
         corrections: [AppliedCorrection]? = nil,
         original: String? = nil,
-        rewrites: [Rewrite]? = nil
+        rewrites: [Rewrite]? = nil,
+        destinationApp: String? = nil,
+        destinationBundleID: String? = nil,
+        isPinned: Bool? = nil
     ) {
         self.id = id
         self.date = date
@@ -82,6 +97,9 @@ struct DictationRun: Codable, Sendable, Identifiable {
         self.corrections = corrections
         self.original = original
         self.rewrites = rewrites
+        self.destinationApp = destinationApp
+        self.destinationBundleID = destinationBundleID
+        self.isPinned = isPinned
     }
 
     init(from decoder: any Decoder) throws {
@@ -96,6 +114,12 @@ struct DictationRun: Codable, Sendable, Identifiable {
         corrections = try container.decodeIfPresent([AppliedCorrection].self, forKey: .corrections)
         original = try container.decodeIfPresent(String.self, forKey: .original)
         rewrites = try container.decodeIfPresent([Rewrite].self, forKey: .rewrites)
+        // Absent in every line written before destinations and pinning existed. Decoded
+        // leniently for the same reason `corrections` is: failing the line would throw away
+        // the user's history to add a column.
+        destinationApp = try container.decodeIfPresent(String.self, forKey: .destinationApp)
+        destinationBundleID = try container.decodeIfPresent(String.self, forKey: .destinationBundleID)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
     }
 }
 

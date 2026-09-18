@@ -33,6 +33,11 @@ final class MainRoute {
         }
     }
 
+    /// Set by ⌘⌥R in Recent: open this run and start a rewrite in the mode currently
+    /// selected, rather than making the user find the button. Cleared by the detail page
+    /// once it has acted on it.
+    var rewriteRequest: UUID?
+
     private init() {}
 
     func open(_ id: UUID) {

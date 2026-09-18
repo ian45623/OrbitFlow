@@ -42,6 +42,13 @@ let package = Package(
             path: "Sources/OrbitFlowStats",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // Sessions and filters: "ten minutes continues a session, eleven starts a new one"
+        // is a decision worth pinning with a test rather than rediscovering from a screen.
+        .target(
+            name: "OrbitFlowHistory",
+            path: "Sources/OrbitFlowHistory",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
@@ -49,6 +56,7 @@ let package = Package(
                 "OrbitFlowAIRewrite",
                 "OrbitFlowHotkey",
                 "OrbitFlowStats",
+                "OrbitFlowHistory",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -73,6 +81,12 @@ let package = Package(
             name: "OrbitFlowHotkeyTests",
             dependencies: ["OrbitFlowHotkey"],
             path: "Tests/OrbitFlowHotkeyTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowHistoryTests",
+            dependencies: ["OrbitFlowHistory"],
+            path: "Tests/OrbitFlowHistoryTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
