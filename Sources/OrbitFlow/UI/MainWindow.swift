@@ -44,7 +44,7 @@ struct MainWindow: View {
             }
         }
         .background(DS.Color.canvas)
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(minWidth: 940, minHeight: 560)
     }
 }
 

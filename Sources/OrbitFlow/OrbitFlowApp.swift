@@ -17,7 +17,10 @@ struct OrbitFlowApp: App {
             // is where the decision to show onboarding instead can be acted on.
             RootWindow(controller: delegate.controller)
         }
-        .defaultSize(width: 860, height: 620)
+        // Recent needs room for three panes — 200 for the rail and 340 for the list before
+        // the transcript starts. At the old 860 the reading pane was the narrowest of the
+        // three, which is backwards.
+        .defaultSize(width: 1080, height: 680)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}

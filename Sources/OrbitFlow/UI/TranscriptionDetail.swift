@@ -76,7 +76,14 @@ struct TranscriptionDetail: View {
             }
         }
         .background(DS.Color.canvas)
-        .task {
+        // Keyed on the run: this view now *stays* on screen in Recent while the selection
+        // changes under it, and a plain `.task` would only ever run for the first run shown
+        // — leaving the editor holding the previous transcript, which `saveCorrection()`
+        // would then write into the newly selected run.
+        .task(id: runID) {
+            pending = []
+            selected = nil
+            instruction = ""
             hasKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""

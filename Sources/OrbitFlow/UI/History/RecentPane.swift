@@ -56,7 +56,12 @@ struct RecentPane: View {
                 Button("") { rewriteSelection() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
             }
+            .frame(width: 0, height: 0)
+            // Invisible is not untouchable: `opacity(0)` alone leaves these buttons in the
+            // hit-test path, where they sit behind the middle of the pane and swallow
+            // clicks meant for the rows.
             .opacity(0)
+            .allowsHitTesting(false)
         }
     }
 
@@ -67,6 +72,10 @@ struct RecentPane: View {
                 // Closing the detail returns to a wider list rather than an empty pane.
                 self.selection = nil
             }
+            // Identity follows the run. Without this the pane keeps one view — and one set
+            // of editor state — across every selection, which is how an edit to one
+            // transcript could land on another.
+            .id(selection)
             .frame(maxWidth: .infinity)
         } else {
             EmptyPanel(
