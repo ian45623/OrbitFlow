@@ -275,6 +275,14 @@ final class DictationController {
     private var readAloudSource: String?
 
     private var holdStarted: Date?
+
+    /// Where this dictation is going, captured when the key goes down.
+    ///
+    /// Read at the *start* rather than at insertion on purpose: a cloud rewrite can take
+    /// seconds, and by the time the text lands the user may have clicked into something
+    /// else. The app they were in when they started talking is the one they meant. The HUD
+    /// is a non-activating panel, so the frontmost app is never us.
+    private var destination: (name: String, bundleID: String?)?
     private var releasedAt: Date?
     private var engineName = ""
 
@@ -868,6 +876,7 @@ final class DictationController {
         state = .starting
         transcript = ""
         holdStarted = Date()
+        destination = Self.frontmostApp()
         isComparing = Settings.shared.compareMode
         recorded.removeAll(keepingCapacity: true)
         engineName = isComparing ? "Comparing…" : Settings.shared.engine.displayName
@@ -1204,11 +1213,24 @@ final class DictationController {
                 text: text,
                 corrections: corrections.isEmpty ? nil : corrections,
                 original: original,
-                rewrites: draft.map { [$0] }
+                rewrites: draft.map { [$0] },
+                destinationApp: destination?.name,
+                destinationBundleID: destination?.bundleID
             )
         )
         self.holdStarted = nil
         self.releasedAt = nil
+        self.destination = nil
+    }
+
+    /// The app in front right now, unless that is us — dictating into Orbit Flow's own
+    /// window (onboarding's test box, the compose row) has no external destination.
+    private static func frontmostApp() -> (name: String, bundleID: String?)? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let name = app.localizedName
+        else { return nil }
+        return (name, app.bundleIdentifier)
     }
 
     /// Light smoothing so the waveform glides instead of strobing at buffer rate.

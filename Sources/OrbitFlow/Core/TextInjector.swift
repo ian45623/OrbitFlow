@@ -23,6 +23,16 @@ enum TextInjector {
     static func insert(_ text: String) {
         guard !text.isEmpty else { return }
 
+        // Onboarding's test box is the one place the focused app is us. Asking the
+        // system-wide element for the focused element then means a same-process AX call
+        // from the main thread, which can block until it times out — and the answer would
+        // be an AX write we already don't trust without observing it. Paste instead.
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            Log.inject.info("frontmost app is us — pasting rather than writing via AX")
+            insertViaPasteboard(text)
+            return
+        }
+
         switch insertViaAccessibility(text) {
         case .inserted:
             Log.inject.info("inserted via AX (\(text.count) chars)")

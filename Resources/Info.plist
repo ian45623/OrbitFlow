@@ -12,6 +12,8 @@
 	<string>OrbitFlow</string>
 	<!-- Separate from the existing Orbit Flow's com.orbitflow.client: distinct TCC identity,
 	     distinct preferences domain, no shared state of any kind. -->
+	<key>ATSApplicationFontsPath</key>
+	<string>Fonts</string>
 	<key>CFBundleIdentifier</key>
 	<string>ai.pivotstudio.orbitflow</string>
 	<key>CFBundlePackageType</key>

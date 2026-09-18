@@ -4,7 +4,9 @@ import Carbon.HIToolbox
 import ServiceManagement
 import SwiftUI
 import OrbitFlowAIRewrite
+import OrbitFlowHistory
 import OrbitFlowHotkey
+import OrbitFlowStats
 
 /// The settings content, shared by the Settings tab in the main window and the standard
 /// ⌘, window. One view rather than two, so the two can never drift apart.
@@ -42,13 +44,11 @@ struct SettingsPanel: View {
     @State private var parakeet = ParakeetDownload.shared
     @State private var updater = Updater.shared
     @State private var isConfirmingRemove = false
+    @State private var isConfirmingClear = false
 
-    /// Shortcut recording: the local key monitor while it's live, the modifier pressed on
-    /// its own so far (committed on release unless a key joins it), and why the last
-    /// attempt was refused.
-    @State private var recordMonitor: Any?
-    @State private var pendingModifier: Int64?
-    @State private var recordProblem: String?
+    /// Shortcut recording. The capture itself lives in `ShortcutRecorder`, shared with
+    /// onboarding; this screen only says what to do with the key that comes back.
+    @State private var recorder = ShortcutRecorder()
 
     /// `SMAppService` is the store for this — there is no mirrored bool in `Settings`,
     /// so the switch can never disagree with System Settings ▸ General ▸ Login Items.
@@ -56,23 +56,136 @@ struct SettingsPanel: View {
     @State private var loginItem = SMAppService.mainApp.status
     @State private var loginItemError: String?
 
+    /// For "Run setup again", which opens the onboarding scene.
+    @Environment(\.openWindow) private var openWindow
+
     private enum TestResult: Equatable {
         case success(count: Int)
         case failure(String)
     }
 
-    /// Settings read as a column, not a page. Capped so the tab in an 860pt window and the
-    /// 520pt ⌘, window lay out identically instead of one stretching into a banner.
-    private let measure: CGFloat = 520
+    /// Which section the sidebar has selected.
+    @State private var section: SettingsSection = .dictation
+
+    /// The run log, for the week's figures. Reloaded by `RunLog.record`, so the strip is
+    /// current without this screen polling anything.
+    @State private var runs = RunStore.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.roomy) {
-                group("Shortcut keys") {
-                    if !controller.isHotkeyArmed { accessibilityNotice }
+        HStack(spacing: 0) {
+            SettingsSidebar(
+                selection: $section,
+                badges: badges,
+                hasMicrophone: Permissions.hasMicrophone,
+                hasAccessibility: Permissions.hasAccessibility,
+                versionLine: versionLine
+            )
+            Hairline(vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    sectionHeader
+                    sectionBody
+                }
+                .padding(DS.Space.panel)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(DS.Color.canvas)
+        }
+        .onAppear {
+            refreshKeyPresence()
+            refreshElevenLabsKeyPresence()
+            loginItem = SMAppService.mainApp.status
+        }
+        .onChange(of: settings.aiProvider) {
+            // Each provider has its own key and its own model list.
+            availableModels = []
+            testResult = nil
+            keyDraft = ""
+            settings.aiModel = settings.aiProvider.defaultModel
+            refreshKeyPresence()
+            // A cloud rewrite with no key for this provider falls back on every call. Don't
+            // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
+            if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
+        }
+        .onChange(of: settings.readAloudProviderOverride) { refreshElevenLabsKeyPresence() }
+        .onChange(of: settings.readAloudEnabled) { _, isOn in
+            if !isOn { controller.stopReadingAloud() }
+            // The tap only listens for mouse-ups while the feature is on.
+            controller.reloadHotkey()
+        }
+        .onDisappear { recorder.stop(resuming: controller) }
+    }
 
-                    shortcutList
+    /// What the sidebar shows on the right of a row: the state you'd otherwise have to
+    /// open the section to learn.
+    private var badges: [SettingsSection: String] {
+        var badges: [SettingsSection: String] = [:]
+        if settings.aiRewriteUse == .off { badges[.cleanupAI] = "Off" }
+        if !settings.readAloudEnabled { badges[.readAloud] = "Off" }
+        let entries = DictionaryStore.shared.entries.count
+        if entries > 0 { badges[.dictionary] = "\(entries)" }
+        return badges
+    }
 
+    private var versionLine: String {
+        switch updater.phase {
+        case .available(let build, _): "v\(Updater.currentVersion) · build \(build) ready"
+        case .upToDate: "v\(Updater.currentVersion) · up to date"
+        default: "v\(Updater.currentVersion) · build \(Updater.currentBuild)"
+        }
+    }
+
+    private var sectionHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: DS.Space.tight) {
+                Text(section.title)
+                    .font(DS.Font.display)
+                    .foregroundStyle(DS.Color.ink)
+                Text(section.summary)
+                    .font(DS.Font.body)
+                    .foregroundStyle(DS.Color.inkMuted)
+            }
+            Spacer()
+            if section == .dictation {
+                HStack(spacing: DS.Space.snug) {
+                    StatusDot(
+                        color: controller.isHotkeyArmed ? DS.Color.positive : DS.Color.caution,
+                        isOn: true
+                    )
+                    MetaLabel(text: controller.isHotkeyArmed ? "Hotkey armed" : "Hotkey off")
+                }
+            }
+        }
+        .padding(.bottom, DS.Space.roomy)
+    }
+
+    @ViewBuilder
+    private var sectionBody: some View {
+        switch section {
+        case .dictation: dictationSection
+        case .speechModel: speechModelSection
+        case .cleanupAI: cleanupSection
+        case .readAloud: readAloudSection
+        case .dictionary: dictionarySection
+        case .history: historySection
+        case .updates: updatesSection
+        case .general: generalSection
+        }
+    }
+
+    // MARK: - Dictation
+
+    private var dictationSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !controller.isHotkeyArmed {
+                accessibilityNotice
+                    .padding(.bottom, DS.Space.base)
+            }
+
+            SettingsRow(label: "Push-to-talk key", help: "Hold to talk, or tap to stay on.") {
+                shortcutList
+            } detail: {
+                VStack(alignment: .leading, spacing: DS.Space.snug) {
                     note("Tap a shortcut to start dictating and tap it again to stop — the text "
                         + "lands wherever your cursor is. Or hold it down and let go, if you'd "
                         + "rather not think about stopping.")
@@ -82,157 +195,355 @@ struct SettingsPanel: View {
                         + "combination like ⌃⌥Space. If a lone modifier turns out to be part of "
                         + "another shortcut, like ⌘ in ⌘C, the recording it started is thrown away.")
                 }
+            }
 
-                group("Model") {
-                    Segmented(
-                        options: SpeechEngineChoice.allCases.map {
-                            ($0, $0 == .apple ? "Apple" : "Parakeet")
-                        },
-                        selection: $settings.engine
-                    )
-                    note(settings.engine == .apple
-                        ? "Apple's on-device transcriber. Streams text while you speak, and needs no download."
-                        : "Parakeet on the Neural Engine. Resolves when you let go, and is more accurate on English.")
-                    if settings.engine == .parakeet { parakeetModelRow }
-                }
+            Hairline()
 
-                group("Dictation pill") {
-                    Segmented(
-                        options: HUDSize.allCases.map { ($0, $0.displayName) },
-                        selection: $settings.hudSize
-                    )
-                    note(settings.hudSize == .compact
-                        ? "Just the level trace, discard, and confirm."
-                        : "Adds the transcript as it resolves, so you can read it before it lands.")
-                    note("Either way: ✓ stops and pastes, ✕ throws the recording away, and "
-                        + "Escape does the same as ✕ without reaching for the mouse. "
-                        + "Takes effect on your next dictation.")
-                }
+            SettingsRow(label: "Recording pill", help: "The indicator while you talk.") {
+                Segmented(
+                    options: HUDSize.allCases.map { ($0, $0.displayName) },
+                    selection: $settings.hudSize
+                )
+            } detail: {
+                note("Compact is just the level trace, discard, and confirm. Full adds the "
+                    + "transcript as it resolves, so you can read it before it lands. "
+                    + "Either way: ✓ stops and pastes, ✕ throws the recording away, and "
+                    + "Escape does the same as ✕. Takes effect on your next dictation.")
+            }
 
-                readAloudGroup
+            Hairline()
 
-                group("Cleanup") {
-                    Toggle(isOn: $settings.cleanupEnabled) {
-                        Text("Clean up transcripts")
-                            .font(DS.Font.body)
-                            .foregroundStyle(DS.Color.ink)
-                    }
+            SettingsRow(label: "Sound", help: "A tick when a dictation starts and lands.") {
+                Toggle("", isOn: $settings.soundEnabled)
                     .toggleStyle(.switch)
-                    note("Strips fillers and fixes spacing and punctuation. Dictionary corrections "
-                        + "run either way.")
+                    .labelsHidden()
+            }
 
-                    Hairline()
+            Hairline()
 
-                    FieldLabel(text: "AI rewrite", color: DS.Color.ink, emphasis: true)
-                    Segmented(
-                        options: AIRewriteUse.allCases.map { ($0, $0.displayName) },
-                        selection: Binding(
-                            get: { settings.aiRewriteUse },
-                            // Always without a key rewrites nothing and falls back on every
-                            // single utterance, which looks like the feature is broken
-                            // rather than unconfigured.
-                            set: { settings.aiRewriteUse = ($0 == .always && !canUseCloud) ? .onDemand : $0 }
-                        )
+            SettingsRow(label: "Clean up text", help: "Drops fillers, fixes spacing and punctuation.") {
+                Toggle("", isOn: $settings.cleanupEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            } detail: {
+                note("Dictionary corrections run either way. What the cleanup pass itself does "
+                    + "is set in Cleanup & AI.")
+            }
+
+            Hairline()
+
+            StatsStrip(stats: weekStats)
+        }
+    }
+
+    /// The run log reduced to the four figures. Which engines count as on-device is app
+    /// knowledge, so it is decided here rather than in `OrbitFlowStats`.
+    private var weekStats: DictationStats {
+        let samples = runs.runs.map { run in
+            DictationSample(
+                date: run.date,
+                words: run.text.split(whereSeparator: \.isWhitespace).count,
+                processSeconds: run.processSeconds,
+                corrections: run.corrections?.count ?? 0,
+                isOnDevice: !run.engine.contains("·")
+            )
+        }
+        return DictationStats.over(samples, since: Date().addingTimeInterval(-7 * 24 * 60 * 60))
+    }
+
+    // MARK: - Speech model
+
+    private var speechModelSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(label: "Engine", help: "What transcribes your voice.") {
+                Segmented(
+                    options: SpeechEngineChoice.allCases.map {
+                        ($0, $0 == .apple ? "Apple" : "Parakeet")
+                    },
+                    selection: $settings.engine
+                )
+            } detail: {
+                note(settings.engine == .apple
+                    ? "Apple's on-device transcriber. Streams text while you speak, and needs no download."
+                    : "Parakeet on the Neural Engine. Resolves when you let go, and is more accurate on English.")
+            }
+
+            Hairline()
+
+            SettingsRow(label: "Compare engines", help: "Run both and show them side by side.") {
+                Toggle("", isOn: $settings.compareMode)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            } detail: {
+                note("Nothing is typed while comparing — the results open in the comparison "
+                    + "window instead.")
+            }
+
+            if settings.engine == .parakeet || settings.compareMode {
+                Hairline()
+                VStack(alignment: .leading, spacing: DS.Space.base) {
+                    MetaLabel(text: "Parakeet model")
+                    parakeetModelRow
+                }
+                .padding(.vertical, DS.Space.base)
+            }
+        }
+    }
+
+    // MARK: - Cleanup & AI
+
+    private var cleanupSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(label: "AI rewrite", help: "When a model rewrites what you said.") {
+                Segmented(
+                    options: AIRewriteUse.allCases.map { ($0, $0.displayName) },
+                    selection: Binding(
+                        get: { settings.aiRewriteUse },
+                        // Always without a key rewrites nothing and falls back on every
+                        // single utterance, which looks like the feature is broken
+                        // rather than unconfigured.
+                        set: { settings.aiRewriteUse = ($0 == .always && !canUseCloud) ? .onDemand : $0 }
                     )
+                )
+            } detail: {
+                VStack(alignment: .leading, spacing: DS.Space.snug) {
                     note(settings.aiRewriteUse.summary)
-
-                    if settings.aiRewriteUse != .off, !canUseCloud {
-                        note(cloudFallbackNote)
-                    }
-
+                    if settings.aiRewriteUse != .off, !canUseCloud { note(cloudFallbackNote) }
                     if settings.aiRewriteUse == .always, !settings.cleanupEnabled {
-                        note("\"Clean up transcripts\" is off, so dictation isn't being rewritten right "
-                            + "now. The right-click rows still work.")
-                    }
-
-                    providerControls
-
-                    if settings.aiRewriteUse != .off {
-                        Hairline()
-                        FieldLabel(text: "Mode", color: DS.Color.ink, emphasis: true)
-                        Segmented(
-                            options: RewriteMode.allCases.map { ($0, $0.displayName) },
-                            selection: $settings.rewriteMode
-                        )
-                        note(settings.rewriteMode.summary
-                            + " Also the mode used by right-click ▸ Services ▸ Rewrite with Orbit Flow.")
+                        note("\"Clean up text\" is off in Dictation, so dictation isn't being "
+                            + "rewritten right now. The right-click rows still work.")
                     }
                 }
-                .onAppear { refreshKeyPresence() }
-                .onChange(of: settings.aiProvider) {
-                    // Each provider has its own key and its own model list.
-                    availableModels = []
-                    testResult = nil
-                    keyDraft = ""
-                    settings.aiModel = settings.aiProvider.defaultModel
-                    refreshKeyPresence()
-                    // A cloud rewrite with no key for this provider falls back on every call. Don't
-                    // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
-                    if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
+            }
+
+            Hairline()
+
+            VStack(alignment: .leading, spacing: DS.Space.base) {
+                providerControls
+            }
+            .padding(.vertical, DS.Space.base)
+
+            if settings.aiRewriteUse != .off {
+                Hairline()
+                SettingsRow(label: "Mode", help: "How a rewrite is asked to change your words.") {
+                    Segmented(
+                        options: RewriteMode.allCases.map { ($0, $0.displayName) },
+                        selection: $settings.rewriteMode
+                    )
+                } detail: {
+                    note(settings.rewriteMode.summary
+                        + " Also the mode used by right-click ▸ Services ▸ Rewrite with Orbit Flow.")
                 }
+            }
+        }
+    }
 
-                group("Launch at login") {
-                    Toggle(isOn: launchAtLoginBinding) {
-                        Text("Open Orbit Flow when I log in")
-                            .font(DS.Font.body)
-                            .foregroundStyle(DS.Color.ink)
+    // MARK: - Dictionary
+
+    private var dictionarySection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(
+                label: "Entries",
+                help: "Corrections applied to every transcript, on this Mac only."
+            ) {
+                HStack(spacing: DS.Space.base) {
+                    MetaLabel(text: "\(DictionaryStore.shared.entries.count) entries")
+                    ActionButton(title: "Open dictionary", kind: .secondary) {
+                        MainRoute.shared.section = .dictionary
+                        AppDelegate.showMainWindow()
                     }
-                    .toggleStyle(.switch)
+                }
+            }
 
-                    if loginItem == .requiresApproval {
-                        note("macOS is holding this back. Approve Orbit Flow under Login Items "
-                            + "and it will start with your Mac.")
-                        ActionButton(title: "Open login items") {
-                            SMAppService.openSystemSettingsLoginItems()
+            Hairline()
+
+            SettingsRow(label: "File", help: "Plain text you can edit or back up yourself.") {
+                ActionButton(title: "Reveal in Finder", kind: .quiet) {
+                    NSWorkspace.shared.activateFileViewerSelecting([DictionaryStore.fileURL])
+                }
+            }
+        }
+    }
+
+    // MARK: - History & privacy
+
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(
+                label: "What's kept",
+                help: "Every dictation, on this Mac. No account, no analytics, no server."
+            ) {
+                MetaLabel(text: "\(runs.runs.count) recordings")
+            } detail: {
+                note("Audio is never written to disk — only the text, the engine that produced "
+                    + "it, and how long it took. Cloud rewrites send the text to the provider "
+                    + "you configured, and nothing else ever leaves this Mac.")
+            }
+
+            Hairline()
+
+            SettingsRow(label: "Clear history", help: "Deletes every recorded dictation.") {
+                ActionButton(title: "Clear…", kind: .quiet) { isConfirmingClear = true }
+                    .confirmationDialog(
+                        "Delete every dictation?",
+                        isPresented: $isConfirmingClear
+                    ) {
+                        Button("Delete all", role: .destructive) {
+                            RunLog.clear()
+                            RunStore.shared.reload()
                         }
-                    } else {
-                        note("Orbit Flow starts with your Mac, hotkey already armed.")
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This can't be undone. Settings, dictionary entries and keys are kept.")
                     }
+            }
 
-                    if let loginItemError {
-                        note(loginItemError)
-                    }
+            Hairline()
 
-                    // A login item and a TCC grant both point at a path. ~/Library/Caches is
-                    // purgeable and `make run` rewrites the bundle there on every build, so a
-                    // copy running from it loses both — which is exactly what "it keeps asking
-                    // for permission" looks like from the outside.
-                    if !isInstalledCopy {
-                        note("This copy is running from "
-                            + "\(Bundle.main.bundleURL.deletingLastPathComponent().path), which "
-                            + "macOS can delete. Run `make install` and launch it from "
-                            + "Applications so the login item and the Accessibility grant stick.")
+            SettingsRow(
+                label: "Auto-delete",
+                help: "Trim history as new dictations arrive."
+            ) {
+                Picker("", selection: historyModeBinding) {
+                    ForEach(HistoryRetentionMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
                     }
                 }
-                .onAppear { loginItem = SMAppService.mainApp.status }
+                .labelsHidden()
+                .fixedSize()
+            } detail: {
+                note("By count or by age, never both — one rule, so there's no question "
+                    + "which one deleted something. Off by default, and what goes is gone: "
+                    + "there is no trash to recover it from.")
+            }
 
-                group("When you close the window") {
-                    Text("Orbit Flow keeps running and the key stays armed. Reopen it from the menu "
-                        + "bar or the Dock icon; quit from the Dock, the menu bar, or ⌘Q.")
-                        .font(DS.Font.caption)
-                        .foregroundStyle(DS.Color.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
+            if settings.historyMode != .off {
+                Hairline()
+                if settings.historyMode == .count { historyLimitRow } else { historyDaysRow }
+                Hairline()
+
+                SettingsRow(
+                    label: "Keep pinned",
+                    help: "Pinned dictations survive the trim."
+                ) {
+                    Toggle("", isOn: $settings.historyKeepsPinned)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .onChange(of: settings.historyKeepsPinned) { RunLog.enforceRetention() }
+                } detail: {
+                    note("Pinned dictations don't count toward the limit either, so pinning "
+                        + "one never pushes another out. Turn this off and the limit applies "
+                        + "to everything, pins included.")
                 }
+            }
 
-                group("Updates") {
-                    Toggle(isOn: $settings.autoUpdate) {
-                        Text("Install updates automatically")
-                            .font(DS.Font.body)
-                            .foregroundStyle(DS.Color.ink)
-                    }
+            Hairline()
+
+            SettingsRow(
+                label: "When you close the window",
+                help: "Orbit Flow keeps running and the key stays armed."
+            ) {
+                MetaLabel(text: "Stays running")
+            } detail: {
+                note("Reopen it from the menu bar or the Dock icon; quit from the Dock, the "
+                    + "menu bar, or ⌘Q.")
+            }
+        }
+    }
+
+    // MARK: - Updates
+
+    private var updatesSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(label: "Install automatically", help: "Never while you're dictating or listening.") {
+                Toggle("", isOn: $settings.autoUpdate)
                     .toggleStyle(.switch)
-                    note("Orbit Flow checks every few hours. With this on, it quits, updates, and "
-                        + "reopens by itself — never while you're dictating or listening.")
+                    .labelsHidden()
+            } detail: {
+                note("Orbit Flow checks every few hours. With this on, it quits, updates, and "
+                    + "reopens by itself.")
+            }
 
-                    Hairline()
+            Hairline()
 
-                    note("Version \(Updater.currentVersion) (build \(Updater.currentBuild))")
+            SettingsRow(label: "This build", help: "Signed and notarized by its developer.") {
+                VStack(alignment: .leading, spacing: DS.Space.snug) {
+                    MetaLabel(text: "v\(Updater.currentVersion) · build \(Updater.currentBuild)")
                     updateRow
                 }
             }
-            .frame(maxWidth: measure, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(DS.Space.wide)
+        }
+    }
+
+    // MARK: - General
+
+    private var generalSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(label: "Launch at login", help: "Starts with your Mac, hotkey already armed.") {
+                VStack(alignment: .leading, spacing: DS.Space.snug) {
+                    Toggle("", isOn: launchAtLoginBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                    if loginItem == .requiresApproval {
+                        note("macOS is holding this back. Approve Orbit Flow under Login Items.")
+                        ActionButton(title: "Open login items", kind: .quiet) {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                    }
+                    if let loginItemError { note(loginItemError) }
+                }
+            }
+
+            Hairline()
+
+            SettingsRow(label: "Microphone", help: "Needed to hear you at all.") {
+                permissionControl(granted: Permissions.hasMicrophone) {
+                    Permissions.openMicrophoneSettings()
+                }
+            }
+
+            Hairline()
+
+            SettingsRow(label: "Accessibility", help: "Needed to see your key and type for you.") {
+                permissionControl(granted: Permissions.hasAccessibility) {
+                    Permissions.openAccessibilitySettings()
+                }
+            }
+
+            Hairline()
+
+            SettingsRow(label: "Setup", help: "The four-step window you saw on first launch.") {
+                ActionButton(title: "Run setup again", kind: .quiet) {
+                    Settings.shared.onboardingCompleted = false
+                    openWindow(id: "onboarding")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+
+            // A login item and a TCC grant both point at a path. ~/Library/Caches is
+            // purgeable and `make run` rewrites the bundle there on every build, so a
+            // copy running from it loses both — which is exactly what "it keeps asking
+            // for permission" looks like from the outside.
+            if !isInstalledCopy {
+                Hairline()
+                note("This copy is running from "
+                    + "\(Bundle.main.bundleURL.deletingLastPathComponent().path), which "
+                    + "macOS can delete. Run `make install` and launch it from "
+                    + "Applications so the login item and the Accessibility grant stick.")
+                    .padding(.vertical, DS.Space.base)
+            }
+        }
+    }
+
+    private func permissionControl(granted: Bool, open: @escaping () -> Void) -> some View {
+        HStack(spacing: DS.Space.base) {
+            HStack(spacing: DS.Space.snug) {
+                StatusDot(color: granted ? DS.Color.positive : DS.Color.caution, isOn: true)
+                MetaLabel(text: granted ? "Allowed" : "Not allowed", reserving: 11)
+            }
+            if !granted {
+                ActionButton(title: "Open System Settings", kind: .secondary, action: open)
+            }
         }
     }
 
@@ -336,86 +647,35 @@ struct SettingsPanel: View {
                 }
             }
 
-            if recordMonitor != nil {
+            if recorder.isRecording {
                 HStack {
                     Text("Press a key or combination…")
                         .font(DS.Font.body)
                         .foregroundStyle(DS.Color.inkMuted)
                     Spacer()
-                    ActionButton(title: "Cancel", kind: .quiet) { stopRecording() }
+                    ActionButton(title: "Cancel", kind: .quiet) { recorder.stop(resuming: controller) }
                 }
                 .padding(DS.Space.snug)
                 .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
 
-                if let recordProblem {
-                    Text(recordProblem)
+                if let problem = recorder.problem {
+                    Text(problem)
                         .font(DS.Font.caption)
                         .foregroundStyle(DS.Color.caution)
                 }
             } else {
                 ActionButton(title: "Record shortcut", systemImage: "plus", kind: .quiet) {
-                    startRecording()
+                    recorder.start(pausing: controller) { key in
+                        settings.shortcutKeys = ShortcutKeys.adding(key, to: settings.shortcutKeys)
+                    }
                 }
             }
         }
-        .onDisappear { stopRecording() }
+        .onDisappear { recorder.stop(resuming: controller) }
     }
 
-    /// Captures the next key press in this window. The event tap is paused meanwhile, both
-    /// so the current shortcuts don't start dictating and because the tap would swallow
-    /// Right ⌥ and Right ⌘ before this monitor ever saw them.
-    private func startRecording() {
-        guard recordMonitor == nil else { return }
-        controller.pauseHotkey()
-        recordProblem = nil
-        recordMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            guard let flags = event.cgEvent?.flags else { return nil }
-            let keyCode = Int64(event.keyCode)
-
-            if event.type == .flagsChanged {
-                let key = Shortcut(keyCode: keyCode)
-                // Caps Lock has no hold state to read; commit it so the refusal shows.
-                guard let flag = key.deviceFlag else {
-                    commit(key)
-                    return nil
-                }
-                if flags.contains(flag) {
-                    pendingModifier = keyCode
-                } else if pendingModifier == keyCode {
-                    commit(key)
-                }
-                return nil
-            }
-
-            pendingModifier = nil
-            if keyCode == Int64(kVK_Escape), flags.intersection(Shortcut.modifierMask).isEmpty {
-                stopRecording()
-                return nil
-            }
-            commit(Shortcut(keyCode: keyCode, modifiers: flags, characters: event.charactersIgnoringModifiers))
-            return nil
-        }
-    }
-
-    private func commit(_ key: Shortcut) {
-        if let problem = key.problem {
-            recordProblem = problem
-            return
-        }
-        settings.shortcutKeys = ShortcutKeys.adding(key, to: settings.shortcutKeys)
-        stopRecording()
-    }
-
-    private func stopRecording() {
-        guard let recordMonitor else { return }
-        NSEvent.removeMonitor(recordMonitor)
-        self.recordMonitor = nil
-        pendingModifier = nil
-        controller.reloadHotkey()
-    }
-
-    private var readAloudGroup: some View {
-        group("Read aloud") {
+    private var readAloudSection: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
             // Highlight detection rides on the same event tap as the hotkey, so it is dead
             // for exactly the same reason.
             if !controller.isHotkeyArmed { accessibilityNotice }
@@ -554,13 +814,7 @@ struct SettingsPanel: View {
                 elevenLabsRows
             }
         }
-        .onAppear { refreshElevenLabsKeyPresence() }
-        .onChange(of: settings.readAloudProviderOverride) { refreshElevenLabsKeyPresence() }
-        .onChange(of: settings.readAloudEnabled) { _, isOn in
-            if !isOn { controller.stopReadingAloud() }
-            // The tap only listens for mouse-ups while the feature is on.
-            controller.reloadHotkey()
-        }
+        .frame(maxWidth: 520, alignment: .leading)
     }
 
     /// One speed control for both engines, mirroring the pill's menu.
@@ -1054,18 +1308,119 @@ struct SettingsPanel: View {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
-    private func group<Content: View>(
-        _ label: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        Surface {
-            VStack(alignment: .leading, spacing: DS.Space.base) {
-                FieldLabel(text: label, color: DS.Color.ink, emphasis: true)
-                content()
+    /// `Slider` works in `Double`, and a range split across two lines reads as a prefix
+    /// `...` to the parser, so the conversion is named rather than inlined.
+    private static let historyLimitBounds =
+        Double(Settings.historyLimitRange.lowerBound)...Double(Settings.historyLimitRange.upperBound)
+
+    /// The limit slider. Its own row because a slider and its readout don't fit beside a
+    /// switch at this column width, and because it only exists while auto-delete is on.
+    private var historyLimitRow: some View {
+        SettingsRow(
+            label: "Keep newest",
+            help: "How many dictations to hold on to."
+        ) {
+            HStack(spacing: DS.Space.base) {
+                Slider(
+                    value: Binding(
+                        get: { Double(settings.historyLimit) },
+                        // Rounded here rather than with `step:`, which would draw 390 tick
+                        // marks under the track — they merge into one solid line.
+                        set: { settings.historyLimit = Self.roundedLimit($0) }
+                    ),
+                    in: Self.historyLimitBounds
+                ) { editing in
+                    // On commit only. Trimming on every frame of a drag would rewrite the
+                    // whole log a hundred times on the way to the number you wanted.
+                    if !editing { RunLog.enforceRetention() }
+                }
+                .tint(DS.Color.ink)
+                .frame(maxWidth: 260)
+
+                MetaLabel(
+                    text: "\(settings.historyLimit) dictations",
+                    color: DS.Color.ink,
+                    reserving: 15
+                )
             }
-            .padding(DS.Space.roomy)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } detail: {
+            note("Counted from the newest. Once history passes this, the oldest are deleted "
+                + "as each new dictation arrives.")
         }
+    }
+
+    /// The window slider. Eight stops rather than a free run of days: the presets are the
+    /// windows anyone actually wants, and a linear day slider would bury everything from a
+    /// week to three months in the first tenth of its travel.
+    ///
+    /// It slides over *indices* into the presets, which is what makes the stops evenly
+    /// spaced on screen while the values they carry keep doubling.
+    private var historyDaysRow: some View {
+        SettingsRow(
+            label: "Keep for",
+            help: "How far back history reaches."
+        ) {
+            HStack(spacing: DS.Space.base) {
+                Slider(
+                    value: Binding(
+                        get: { Double(Self.presetIndex(of: settings.historyDays)) },
+                        set: { settings.historyDays = Self.preset(at: Int($0.rounded())) }
+                    ),
+                    in: 0...Double(RetentionRule.dayPresets.count - 1),
+                    step: 1
+                ) { editing in
+                    if !editing { RunLog.enforceRetention() }
+                }
+                .tint(DS.Color.ink)
+                .frame(maxWidth: 260)
+
+                MetaLabel(
+                    text: RetentionRule.dayLabel(settings.historyDays),
+                    color: DS.Color.ink,
+                    reserving: 8
+                )
+            }
+        } detail: {
+            note("Counted from when each dictation was recorded. Anything older than the "
+                + "window is deleted as each new dictation arrives.")
+        }
+    }
+
+    /// Nearest multiple of the step, clamped to the slider's own bounds so a drag to the
+    /// end lands on 2000 rather than on 1998.
+    private static func roundedLimit(_ value: Double) -> Int {
+        let step = Double(Settings.historyLimitStep)
+        let rounded = Int((value / step).rounded() * step)
+        return min(max(rounded, Settings.historyLimitRange.lowerBound),
+                   Settings.historyLimitRange.upperBound)
+    }
+
+    /// Where a stored window sits on the slider. A value that isn't a preset — an older
+    /// build's, or a hand-edited default — takes the nearest stop rather than snapping to
+    /// the start and quietly shortening the user's window.
+    private static func presetIndex(of days: Int) -> Int {
+        let presets = RetentionRule.dayPresets
+        let nearest = presets.enumerated().min {
+            abs($0.element - days) < abs($1.element - days)
+        }
+        return nearest?.offset ?? 0
+    }
+
+    private static func preset(at index: Int) -> Int {
+        let presets = RetentionRule.dayPresets
+        return presets[min(max(index, 0), presets.count - 1)]
+    }
+
+    /// Switching modes trims immediately against the new rule — a setting that waits until
+    /// the next dictation to mean anything is worse than one that bites.
+    private var historyModeBinding: Binding<HistoryRetentionMode> {
+        Binding(
+            get: { settings.historyMode },
+            set: { mode in
+                settings.historyMode = mode
+                if mode != .off { RunLog.enforceRetention() }
+            }
+        )
     }
 
     private func note(_ text: String) -> some View {
@@ -1083,7 +1438,7 @@ struct SettingsWindow: View {
 
     var body: some View {
         SettingsPanel(controller: controller)
-            .frame(width: 560, height: 560)
+            .frame(width: 860, height: 600)
             .background(DS.Color.canvas)
     }
 }

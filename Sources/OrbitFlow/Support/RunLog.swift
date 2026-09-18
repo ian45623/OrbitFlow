@@ -1,4 +1,5 @@
 import OrbitFlowDictionary
+import OrbitFlowHistory
 import OrbitFlowHotkey
 import Foundation
 
@@ -52,6 +53,18 @@ struct DictationRun: Codable, Sendable, Identifiable {
     /// `corrections`.
     var rewrites: [Rewrite]?
 
+    /// The app the text landed in, and its bundle identifier. Captured when the key goes
+    /// down rather than at insertion: a cloud rewrite can take seconds, and by the time the
+    /// text lands the user may have moved on to another window.
+    ///
+    /// Optional for backwards compatibility, like `corrections` — runs recorded before this
+    /// existed group under "Unknown" rather than disappearing from a filter.
+    var destinationApp: String?
+    var destinationBundleID: String?
+
+    /// Kept deliberately, so it survives a "delete all" prompt's twin: the filter rail.
+    var isPinned: Bool?
+
     /// The transcript as the engine heard it, kept only when cleanup actually changed it,
     /// so history can show the rewrite next to what was really said. Optional for the same
     /// backwards-compatibility reason as `corrections`.
@@ -70,7 +83,10 @@ struct DictationRun: Codable, Sendable, Identifiable {
         group: String? = nil,
         corrections: [AppliedCorrection]? = nil,
         original: String? = nil,
-        rewrites: [Rewrite]? = nil
+        rewrites: [Rewrite]? = nil,
+        destinationApp: String? = nil,
+        destinationBundleID: String? = nil,
+        isPinned: Bool? = nil
     ) {
         self.id = id
         self.date = date
@@ -82,6 +98,9 @@ struct DictationRun: Codable, Sendable, Identifiable {
         self.corrections = corrections
         self.original = original
         self.rewrites = rewrites
+        self.destinationApp = destinationApp
+        self.destinationBundleID = destinationBundleID
+        self.isPinned = isPinned
     }
 
     init(from decoder: any Decoder) throws {
@@ -96,6 +115,27 @@ struct DictationRun: Codable, Sendable, Identifiable {
         corrections = try container.decodeIfPresent([AppliedCorrection].self, forKey: .corrections)
         original = try container.decodeIfPresent(String.self, forKey: .original)
         rewrites = try container.decodeIfPresent([Rewrite].self, forKey: .rewrites)
+        // Absent in every line written before destinations and pinning existed. Decoded
+        // leniently for the same reason `corrections` is: failing the line would throw away
+        // the user's history to add a column.
+        destinationApp = try container.decodeIfPresent(String.self, forKey: .destinationApp)
+        destinationBundleID = try container.decodeIfPresent(String.self, forKey: .destinationBundleID)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
+    }
+}
+
+extension DictationRun {
+    /// This run reduced to the facts history sorts, filters and expires by.
+    var historyItem: HistoryItem {
+        HistoryItem(
+            id: id,
+            date: date,
+            destination: destinationApp,
+            words: text.split(whereSeparator: \.isWhitespace).count,
+            isPinned: isPinned ?? false,
+            wasRewritten: !(rewrites ?? []).isEmpty,
+            corrections: corrections?.count ?? 0
+        )
     }
 }
 
@@ -118,14 +158,42 @@ enum RunLog {
 
     static func record(_ run: DictationRun) {
         append(run)
-        regenerate()
-        RunStore.shared.reload()
+        published()
     }
 
     static func record(_ runs: [DictationRun]) {
         runs.forEach(append)
+        published()
+    }
+
+    /// Everything a write owes the rest of the app: trim to the retention setting, then
+    /// republish the dashboard and the Recent pane.
+    ///
+    /// The guard is not an optimisation for its own sake — `enforceRetention` deletes by
+    /// rewriting the whole file, and doing that unconditionally would turn every
+    /// dictation's append into a full rewrite plus a second dashboard render.
+    private static func published() {
+        guard !enforceRetention() else { return }
         regenerate()
         RunStore.shared.reload()
+    }
+
+    /// Deletes whatever has fallen past `Settings.retentionPolicy`.
+    ///
+    /// Returns whether anything went — and when it did, the file has already been
+    /// rewritten, the dashboard regenerated and the store reloaded, so the caller owes
+    /// nothing further.
+    @discardableResult
+    static func enforceRetention() -> Bool {
+        let policy = Settings.shared.retentionPolicy
+        guard policy.rule != .keepEverything else { return false }
+
+        let runs = load()
+        let expired = History.expired(from: runs.map(\.historyItem), policy: policy)
+        guard !expired.isEmpty else { return false }
+
+        rewrite(runs.filter { !expired.contains($0.id) })
+        return true
     }
 
     private static func append(_ run: DictationRun) {

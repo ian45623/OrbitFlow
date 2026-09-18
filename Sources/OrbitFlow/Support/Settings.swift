@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
+import OrbitFlowHistory
 import OrbitFlowHotkey
 
 /// Which speech engine transcribes an utterance.
@@ -98,6 +99,24 @@ enum VoiceEngine: String, CaseIterable, Sendable {
     }
 }
 
+/// Which auto-delete rule the History & privacy section is running.
+///
+/// Off is a case here rather than a sentinel number, so "nothing is being deleted" is as
+/// explicit in storage as it is on screen.
+enum HistoryRetentionMode: String, CaseIterable, Sendable {
+    case off
+    case count
+    case age
+
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .count: "Keep the newest dictations"
+        case .age: "Keep recent dictations"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class Settings {
@@ -121,6 +140,13 @@ final class Settings {
     /// flight. Off by default: quitting and relaunching is something to opt into.
     var autoUpdate: Bool {
         didSet { defaults.set(autoUpdate, forKey: Keys.autoUpdate) }
+    }
+
+    /// The user has been through onboarding — finished it or skipped it. Onboarding still
+    /// reopens on a later launch if a permission has gone missing, so this records "don't
+    /// greet me again", not "setup is complete".
+    var onboardingCompleted: Bool {
+        didSet { defaults.set(onboardingCompleted, forKey: Keys.onboardingCompleted) }
     }
 
     /// Run the cleanup pass before injecting. Off = raw engine output.
@@ -238,6 +264,56 @@ final class Settings {
         didSet { defaults.set(elevenLabsModel, forKey: Keys.elevenLabsModel) }
     }
 
+    /// Which auto-delete rule runs, if any. Off by default — a feature that deletes the
+    /// user's own data without asking has to be opted into.
+    ///
+    /// The mode is stored apart from the two numbers it selects between, so switching
+    /// count → age → count comes back to the count you had rather than to a default.
+    var historyMode: HistoryRetentionMode {
+        didSet { defaults.set(historyMode.rawValue, forKey: Keys.historyMode) }
+    }
+
+    /// How many dictations `historyMode == .count` keeps.
+    var historyLimit: Int {
+        didSet { defaults.set(historyLimit, forKey: Keys.historyLimit) }
+    }
+
+    /// How many days `historyMode == .age` keeps. One of `RetentionRule.dayPresets`.
+    var historyDays: Int {
+        didSet { defaults.set(historyDays, forKey: Keys.historyDays) }
+    }
+
+    /// Pinned dictations are exempt from `historyLimit`: never auto-deleted, and never
+    /// counted against it. On by default — pinning is the only undo this feature has.
+    var historyKeepsPinned: Bool {
+        didSet { defaults.set(historyKeepsPinned, forKey: Keys.historyKeepsPinned) }
+    }
+
+    /// What `RunLog` enforces after each dictation. Assembling the rule here is what keeps
+    /// the two numbers from ever being live at once — only the mode decides which is read.
+    var retentionPolicy: RetentionPolicy {
+        let rule: RetentionRule = switch historyMode {
+        case .off: .keepEverything
+        case .count: .newest(historyLimit)
+        case .age: .within(days: historyDays)
+        }
+        return RetentionPolicy(rule: rule, keepsPinned: historyKeepsPinned)
+    }
+
+    /// The slider's travel. The floor is deliberately not 1: a cap low enough to delete
+    /// this morning's work before lunch is a mistake the UI shouldn't offer.
+    static let historyLimitRange = 50...2000
+    /// Where the slider lands the first time auto-delete is switched on. High enough that
+    /// one click can't vaporise a month of history.
+    static let defaultHistoryLimit = 250
+    /// Slider granularity. Fine enough to stop on 145 or 175, coarse enough to drag.
+    ///
+    /// Applied by rounding in the binding rather than by `Slider`'s `step:`, which draws a
+    /// tick per step — 390 of them merge into a solid line under the track.
+    static let historyLimitStep = 5
+    /// Where the age slider lands the first time that mode is chosen.
+    static let defaultHistoryDays = 30
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -260,6 +336,7 @@ final class Settings {
         static let rewriteMode = "rewriteMode"
         static let compareMode = "compareMode"
         static let autoUpdate = "autoUpdate"
+        static let onboardingCompleted = "onboardingCompleted"
         static let hudSize = "hudSize"
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
@@ -272,6 +349,10 @@ final class Settings {
         static let readAloudEngine = "readAloudEngine"
         static let elevenLabsVoiceID = "elevenLabsVoiceID"
         static let elevenLabsModel = "elevenLabsModel"
+        static let historyMode = "historyMode"
+        static let historyLimit = "historyLimit"
+        static let historyDays = "historyDays"
+        static let historyKeepsPinned = "historyKeepsPinned"
     }
 
     private init() {
@@ -321,6 +402,7 @@ final class Settings {
         ) ?? .faithful
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         autoUpdate = defaults.object(forKey: Keys.autoUpdate) as? Bool ?? false
+        onboardingCompleted = defaults.bool(forKey: Keys.onboardingCompleted)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
         readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false
@@ -345,6 +427,19 @@ final class Settings {
             ?? .system
         elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
         elevenLabsModel = defaults.string(forKey: Keys.elevenLabsModel) ?? ElevenLabs.defaultModel
+        // A stored limit with no stored mode is a user who set one before the age rule
+        // existed: they chose a number of dictations, so that is the mode they get.
+        let storedLimit = defaults.object(forKey: Keys.historyLimit) as? Int
+        historyLimit = (storedLimit ?? 0) > 0 ? storedLimit! : Settings.defaultHistoryLimit
+        historyDays = defaults.object(forKey: Keys.historyDays) as? Int
+            ?? Settings.defaultHistoryDays
+        if let stored = defaults.string(forKey: Keys.historyMode),
+           let mode = HistoryRetentionMode(rawValue: stored) {
+            historyMode = mode
+        } else {
+            historyMode = (storedLimit ?? 0) > 0 ? .count : .off
+        }
+        historyKeepsPinned = defaults.object(forKey: Keys.historyKeepsPinned) as? Bool ?? true
 
         // `didSet` does not fire during initialization, so without these two writes the
         // migration above would re-run on every launch and a legacy `cloud` string would

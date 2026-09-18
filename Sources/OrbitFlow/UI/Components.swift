@@ -27,10 +27,16 @@ struct Surface<Content: View>: View {
 /// The horizontal hairline that separates rows and sections. Rows are separated rather
 /// than boxed — a list of transcripts is one document, not a stack of cards.
 struct Hairline: View {
+    /// Vertical when it separates panes rather than rows.
+    var vertical = false
+
     var body: some View {
         Rectangle()
             .fill(DS.Color.line)
-            .frame(height: DS.Border.hairline)
+            .frame(
+                width: vertical ? DS.Border.hairline : nil,
+                height: vertical ? nil : DS.Border.hairline
+            )
     }
 }
 
@@ -70,8 +76,8 @@ struct Tag: View {
     }
 }
 
-/// Monospaced-digit numerals — durations, timings, the elapsed counter. Serif, so the
-/// figures sit with the transcript rather than looking bolted on from a terminal.
+/// Monospaced-digit numerals — durations, timings, the elapsed counter. Mono, because a
+/// duration is a measurement (rule 3), and mono figures don't reflow as they tick.
 struct Numeral: View {
     let text: String
     var large = false
@@ -81,6 +87,153 @@ struct Numeral: View {
         Text(text)
             .font(large ? DS.Font.counter : DS.Font.numeral)
             .foregroundStyle(color)
+    }
+}
+
+/// Instrumentation: one fact about a row, in the mono slot on its right.
+///
+/// Rule 3 — metadata is mono, 10–11pt, uppercase, in a fixed slot. Uppercasing happens
+/// here rather than at call sites, so a status can be written as a sentence-case string and
+/// still land as instrumentation. The slot holds its width through a value change: a row
+/// whose right edge jumps as "WAITING" becomes "ALLOWED" reads as the layout twitching.
+struct MetaLabel: View {
+    let text: String
+    var color: Color = DS.Color.inkFaint
+    var emphasis = false
+    /// Reserve at least this much width. The caller passes the longest value the slot can
+    /// hold, measured in characters.
+    var reserving: Int?
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(emphasis ? DS.Font.metaEmphasis : DS.Font.meta)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(minWidth: reserved, alignment: .trailing)
+    }
+
+    /// JetBrains Mono's advance width is 0.6 em, so a character count converts to points
+    /// without measuring the string.
+    private var reserved: CGFloat? {
+        guard let reserving else { return nil }
+        return CGFloat(reserving) * (emphasis ? 11 : 10) * 0.6
+    }
+}
+
+/// A step in a sequence the user works through: onboarding's four, and Settings' one-line
+/// rows. Collapsed it is one line — state, title, description, and a fact on the right.
+/// Expanded it keeps that line and opens `content` underneath.
+///
+/// The state disc is the only place `positive` and `caution` appear in a row, and it is
+/// never the only signal: the meta slot says the same thing in words, because hue doesn't
+/// carry state on its own (rule 1).
+enum StepState {
+    /// Not reached yet, or nothing to do.
+    case waiting
+    /// Done — a permission granted, a key chosen.
+    case done
+    /// Needs the user before it works.
+    case needsYou
+}
+
+struct StepRow<Content: View>: View {
+    let title: String
+    let description: String
+    var state: StepState = .waiting
+    var meta: String?
+    var metaReserving: Int?
+    var isExpanded = false
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
+            HStack(spacing: DS.Space.base) {
+                disc
+                Text(title)
+                    .font(DS.Font.bodyEmphasis)
+                    .foregroundStyle(DS.Color.ink)
+                Text(description)
+                    .font(DS.Font.body)
+                    .foregroundStyle(DS.Color.inkMuted)
+                    .lineLimit(1)
+                Spacer(minLength: DS.Space.base)
+                if let meta {
+                    MetaLabel(text: meta, color: metaColor, reserving: metaReserving)
+                }
+            }
+
+            if isExpanded {
+                content()
+                    .padding(.leading, discSize + DS.Space.base)
+            }
+        }
+        .padding(DS.Space.roomy)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .fill(isExpanded ? DS.Color.surface : DS.Color.canvas)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .strokeBorder(
+                    isExpanded ? DS.Color.ink : DS.Color.line,
+                    lineWidth: isExpanded ? DS.Border.emphasis : DS.Border.hairline
+                )
+        )
+        .animation(DS.Motion.panel, value: isExpanded)
+    }
+
+    private var metaColor: Color {
+        switch state {
+        case .waiting: DS.Color.inkFaint
+        case .done: DS.Color.inkFaint
+        case .needsYou: DS.Color.caution
+        }
+    }
+
+    private let discSize: CGFloat = 20
+
+    @ViewBuilder
+    private var disc: some View {
+        switch state {
+        case .waiting:
+            Circle()
+                .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+                .frame(width: discSize, height: discSize)
+        case .done:
+            Circle()
+                .fill(DS.Color.positive)
+                .frame(width: discSize, height: discSize)
+                .overlay(
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(DS.Color.surface)
+                )
+        case .needsYou:
+            Circle()
+                .strokeBorder(DS.Color.ink, lineWidth: DS.Border.emphasis)
+                .frame(width: discSize, height: discSize)
+        }
+    }
+}
+
+extension StepRow where Content == EmptyView {
+    init(
+        title: String,
+        description: String,
+        state: StepState = .waiting,
+        meta: String? = nil,
+        metaReserving: Int? = nil
+    ) {
+        self.init(
+            title: title,
+            description: description,
+            state: state,
+            meta: meta,
+            metaReserving: metaReserving,
+            isExpanded: false,
+            content: { EmptyView() }
+        )
     }
 }
 
@@ -100,6 +253,46 @@ struct StatusDot: View {
 }
 
 // MARK: - Controls
+
+/// A square icon action — pin, play, stop. The tooltip carries the words that the icon
+/// replaces, because an icon alone is a guess and this app has non-obvious verbs in it.
+///
+/// Hover fills the surface rather than tinting the glyph: hue never carries state (rule 01),
+/// and a control that only reacts on press gives no sign it can be pressed at all.
+struct IconButton: View {
+    let systemImage: String
+    /// What it does, in words. Shown as the tooltip and read by VoiceOver.
+    let label: String
+    var isOn = false
+    var isEnabled = true
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isOn ? DS.Color.canvas : DS.Color.ink)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .fill(isOn ? DS.Color.ink : (isHovering ? DS.Color.surfaceHover : .clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .strokeBorder(isOn ? .clear : DS.Color.line, lineWidth: DS.Border.hairline)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .onHover { isHovering = $0 && isEnabled }
+        .animation(DS.Motion.press, value: isHovering)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
 
 /// The app's button.
 ///

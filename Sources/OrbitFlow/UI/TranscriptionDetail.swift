@@ -33,8 +33,13 @@ struct TranscriptionDetail: View {
     /// Runs that haven't landed yet, newest first. Successful ones move to the stored list.
     @State private var pending: [Version] = []
     @State private var selected: UUID?
-    /// Read all versions in one scroll instead of one at a time.
-    @State private var isComparing = false
+    /// The entry being edited, if any. Every version is editable — a rewrite is a draft
+    /// like any other, and the one thing you want after reading one is to change a word.
+    /// Read by default: a text box where a paragraph should be reads as a form to fill in.
+    @State private var editingID: UUID?
+    /// What the open editor holds, and what it held when it opened.
+    @State private var draft = ""
+    @State private var draftOrigin = ""
     @State private var engine: Engine = .cloud
     /// Read once rather than per redraw: this is a file read, not a property.
     @State private var hasKey = false
@@ -63,120 +68,329 @@ struct TranscriptionDetail: View {
         versions.first { $0.id == selected } ?? versions.first
     }
 
+    /// One thing to read: what was said, what landed, or a rewrite of either.
+    ///
+    /// The pane is a stack of these. They all have the same shape — a label saying what this
+    /// version *is*, what produced it, and the text — because that is the question being
+    /// asked every time: which of these do I want, and where did it come from.
+    private struct Entry: Identifiable {
+        enum Kind {
+            /// The engine's own words, before anything touched them.
+            case spoken
+            /// The cleanup pass — what actually landed in the other app.
+            case landed
+            case rewrite
+        }
+
+        let id: UUID
+        let kind: Kind
+        /// What this version is: "What you said", "Cleaned up", or the mode that made it.
+        let label: String
+        /// What produced it, and when.
+        let engine: String
+        var date: Date?
+        var text: String?
+        var failure: String?
+    }
+
+    /// Newest first, with the original at the bottom: a rewrite is read against the thing it
+    /// came from, and the thing it came from doesn't move.
+    private var entries: [Entry] {
+        var entries: [Entry] = versions.map {
+            Entry(
+                id: $0.id,
+                kind: .rewrite,
+                label: $0.instruction,
+                engine: $0.engine,
+                date: $0.date,
+                text: $0.text,
+                failure: $0.failure
+            )
+        }
+
+        if let run {
+            // Only when cleanup actually changed something: `original` is kept exactly then,
+            // and an identical pair of entries would say the pass had done work it hadn't.
+            if run.original != nil {
+                entries.append(
+                    Entry(
+                        id: landedID,
+                        kind: .landed,
+                        label: "Cleaned up",
+                        engine: "This is what landed",
+                        date: run.date,
+                        text: run.text
+                    )
+                )
+            }
+            entries.append(
+                Entry(
+                    id: spokenID,
+                    kind: .spoken,
+                    label: "What you said",
+                    engine: "\(run.engine) · \(Int(run.audioSeconds.rounded()))s audio",
+                    date: run.date,
+                    text: source
+                )
+            )
+        }
+        return entries
+    }
+
+    /// Stable ids for the two entries that aren't rewrites, so selection survives redraws.
+    private var spokenID: UUID { runID }
+    private var landedID: UUID {
+        UUID(uuidString: "00000000-0000-0000-0000-000000000001") ?? runID
+    }
+
+    /// The text the next rewrite runs on: whichever entry is selected, and the landed text
+    /// by default. Rewriting a rewrite is the point of selecting one.
+    private var sourceText: String {
+        entries.first { $0.id == selected }?.text ?? run?.text ?? source
+    }
+
+    private var sourceLabel: String {
+        entries.first { $0.id == selected }?.label ?? (run?.original != nil ? "Cleaned up" : "What you said")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            HStack(spacing: 0) {
-                sourceColumn
-                    .frame(width: 320)
-                Divider()
-                versionColumn
-                    .frame(maxWidth: .infinity)
+            Hairline()
+            ScrollView {
+                VStack(alignment: .leading, spacing: DS.Space.base) {
+                    ForEach(entries) { entry in
+                        entryCard(entry)
+                    }
+                    dictionarySection
+                }
+                .padding(DS.Space.base)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            composer
         }
         .background(DS.Color.canvas)
-        .task {
+        .background {
+            if editingID == nil {
+                Button("") { copy(sourceText) }
+                    .keyboardShortcut("c", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Keyed on the run: this view stays on screen in Recent while the selection changes
+        // under it, and a plain `.task` would only ever run for the first run shown —
+        // leaving the editor holding the previous transcript, which `saveCorrection()` would
+        // then write into the newly selected run.
+        .task(id: runID) {
+            pending = []
+            selected = nil
+            instruction = ""
+            editingID = nil
             hasKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""
             savedSource = source
+            runRequestedRewrite()
         }
+        .onChange(of: MainRoute.shared.rewriteRequest) { runRequestedRewrite() }
     }
 
     // MARK: - Header
 
+    /// One line: what produced this dictation and when, then the three things you do to it.
+    /// Everything rarer lives behind the ⋯, so the row never wraps in a narrow pane.
     private var header: some View {
         HStack(spacing: DS.Space.snug) {
-            ActionButton(title: "History", systemImage: "chevron.left", kind: .quiet, action: onBack)
-            Spacer()
             if let run {
-                // Reads whatever the page is showing: the selected rewrite if there is one,
-                // otherwise the text on the left. Replaying doesn't file a new entry — this
-                // one is already in History.
-                let spoken = current?.text ?? source
+                MetaLabel(text: "\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
+                    .layoutPriority(-1)
+
+                Spacer(minLength: DS.Space.snug)
+
+                let isPinned = run.isPinned ?? false
+                IconButton(
+                    systemImage: isPinned ? "pin.fill" : "pin",
+                    label: isPinned ? "Unpin this dictation" : "Pin this dictation",
+                    isOn: isPinned
+                ) {
+                    RunLog.modify(run.id) { $0.isPinned = !($0.isPinned ?? false) }
+                }
+
+                // Reads whatever is selected, or the landed text. Replaying doesn't file a
+                // new entry — this one is already in History.
+                let spoken = sourceText
                 // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
                 // before a sound is made, and a second press during that window would
                 // cancel a request already billed and send a duplicate.
-                ActionButton(
-                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Read aloud",
-                    systemImage: speaker.isSpeaking || speaker.isPreparing ? "stop.fill" : "play.fill",
-                    kind: .quiet,
-                    isEnabled: speaker.isSpeaking || speaker.isPreparing || !spoken.trimmed.isEmpty
+                let isSpeaking = speaker.isSpeaking || speaker.isPreparing
+                IconButton(
+                    systemImage: isSpeaking ? "stop.fill" : "play.fill",
+                    label: isSpeaking ? "Stop reading" : "Read this aloud",
+                    isOn: isSpeaking,
+                    isEnabled: isSpeaking || !spoken.trimmed.isEmpty
                 ) {
-                    if speaker.isSpeaking || speaker.isPreparing {
+                    if isSpeaking {
                         speaker.stop()
                     } else {
                         speaker.speak(spoken)
                     }
                 }
-                Text("\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
-                    .font(DS.Font.caption)
-                    .foregroundStyle(DS.Color.inkFaint)
+
+                IconButton(systemImage: "doc.on.doc", label: "Copy to the clipboard") {
+                    copy(sourceText)
+                }
+
+                Menu {
+                    Button("Reveal dictionary file") {
+                        NSWorkspace.shared.activateFileViewerSelecting([DictionaryStore.fileURL])
+                    }
+                    Divider()
+                    Button("Delete this dictation", role: .destructive) {
+                        RunLog.delete(run)
+                        onBack()
+                    }
+                } label: {
+                    Text("⋯")
+                        .font(DS.Font.bodyEmphasis)
+                        .foregroundStyle(DS.Color.inkMuted)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
         }
+        .lineLimit(1)
         .padding(.horizontal, DS.Space.base)
-        .padding(.vertical, DS.Space.tight)
+        .padding(.vertical, DS.Space.snug)
         .background(DS.Color.surface)
     }
 
-    // MARK: - Left: the transcript and the controls
+    // MARK: - Entries
 
-    private var sourceColumn: some View {
-        VStack(alignment: .leading, spacing: DS.Space.tight) {
-            HStack(spacing: DS.Space.snug) {
-                Text("What you said")
-                    .font(DS.Font.label)
-                    .foregroundStyle(DS.Color.inkMuted)
-                Spacer()
-                if source != savedSource {
-                    ActionButton(title: "Revert", kind: .quiet) { source = savedSource }
-                    ActionButton(title: "Save", kind: .quiet, action: saveCorrection)
-                } else {
-                    CopyButton(text: source)
-                }
-            }
-            ProseEditor(text: $source, minHeight: 120)
-                .frame(maxHeight: .infinity)
-            Text("Fix a misheard word here, then rewrite from the corrected text.")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
-        }
-        .padding(DS.Space.base)
-    }
+    /// Every version reads the same way, whatever made it: a label, what produced it, its
+    /// own copy button, and the text. Clicking one aims the composer at it.
+    @ViewBuilder
+    private func entryCard(_ entry: Entry) -> some View {
+        let isSource = selected == entry.id || (selected == nil && isDefaultSource(entry))
 
-    // MARK: - Right: the versions
-
-    private var versionColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            controls
-            Divider()
-            if versions.isEmpty {
-                empty
-            } else {
-                rail
-                Divider()
-                reader
-            }
-        }
-    }
-
-    /// Everything that starts a rewrite, in one block at the top of the column.
-    private var controls: some View {
         VStack(alignment: .leading, spacing: DS.Space.snug) {
-            Flow {
-                ActionButton(title: "All modes", kind: .primary, isEnabled: canRun) {
-                    for mode in RewriteMode.allCases { start(mode) }
+            HStack(spacing: DS.Space.snug) {
+                Text(entry.label)
+                    .font(DS.Font.bodyEmphasis)
+                    .foregroundStyle(DS.Color.ink)
+                    .lineLimit(1)
+                MetaLabel(text: entry.date.map { "\(entry.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? entry.engine)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
+
+                Spacer(minLength: DS.Space.snug)
+
+                if isSource {
+                    MetaLabel(text: "Rewriting from this")
                 }
-                ForEach(RewriteMode.allCases, id: \.self) { mode in
-                    ActionButton(title: mode.displayName, kind: .secondary, isEnabled: canRun) {
-                        start(mode)
+                if editingID == entry.id {
+                    ActionButton(title: "Save", kind: .quiet) { saveEdit(of: entry) }
+                    ActionButton(title: "Cancel", kind: .quiet) {
+                        withAnimation(DS.Motion.panel) { editingID = nil }
+                    }
+                } else {
+                    IconButton(systemImage: "pencil", label: "Edit this version") {
+                        draft = entry.text ?? ""
+                        draftOrigin = draft
+                        selected = entry.id
+                        withAnimation(DS.Motion.panel) { editingID = entry.id }
+                    }
+                }
+                if let text = entry.text, editingID != entry.id {
+                    IconButton(systemImage: "doc.on.doc", label: "Copy this version") { copy(text) }
+                }
+                if entry.kind == .rewrite {
+                    IconButton(systemImage: "trash", label: "Delete this rewrite") {
+                        delete(Version(id: entry.id, instruction: entry.label, engine: entry.engine))
                     }
                 }
             }
 
+            if editingID == entry.id {
+                ProseEditor(text: $draft, minHeight: 120)
+                Text(entry.kind == .spoken
+                    ? "Fix a misheard word here, then rewrite from the corrected text."
+                    : "Edit this version. Rewrites run from whichever version is selected.")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkFaint)
+            } else if let failure = entry.failure {
+                Text(failure)
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.caution)
+            } else if let text = entry.text {
+                Text(text)
+                    .font(entry.kind == .rewrite ? DS.Font.prose : DS.Font.display)
+                    .lineSpacing(DS.Font.proseLeading)
+                    .foregroundStyle(DS.Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                MetaLabel(text: "Rewriting…")
+            }
+        }
+        .padding(DS.Space.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .fill(entry.kind == .rewrite ? DS.Color.surface : DS.Color.canvas)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.card)
+                .strokeBorder(
+                    isSource ? DS.Color.ink : DS.Color.line,
+                    lineWidth: isSource ? DS.Border.emphasis : DS.Border.hairline
+                )
+        )
+        .contentShape(.rect)
+        .onTapGesture { withAnimation(DS.Motion.press) { selected = entry.id } }
+    }
+
+    /// With nothing chosen, a rewrite runs on what landed — the text that actually reached
+    /// the other app — falling back to the transcript when cleanup changed nothing.
+    private func isDefaultSource(_ entry: Entry) -> Bool {
+        run?.original != nil ? entry.kind == .landed : entry.kind == .spoken
+    }
+
+    // MARK: - Composer
+
+    /// Pinned to the bottom, like the place you type in any conversation: the modes, a free
+    /// instruction, and a line saying which version the next run will read from.
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.base) {
+                Flow(spacing: DS.Space.snug) {
+                    ForEach(RewriteMode.allCases, id: \.self) { mode in
+                        ActionButton(title: mode.displayName, kind: .secondary, isEnabled: canRun) {
+                            start(mode)
+                        }
+                    }
+                    ActionButton(title: "All modes", kind: .quiet, isEnabled: canRun) {
+                        for mode in RewriteMode.allCases { start(mode) }
+                    }
+                }
+                Spacer(minLength: DS.Space.snug)
+                // Only when there's a choice to make. One engine available is not a choice.
+                if isCloudReady, OnDeviceRewriter.isAvailable {
+                    Segmented(
+                        options: [(.cloud, "Cloud"), (.onDevice, "On-device")],
+                        selection: $engine
+                    )
+                    .fixedSize()
+                } else {
+                    MetaLabel(text: engineLabel)
+                }
+            }
+
             HStack(spacing: DS.Space.snug) {
-                TextField("Or write an instruction — turn this into short bullet points", text: $instruction)
+                TextField("Ask for something else — “tighten this to one line”", text: $instruction)
                     .textFieldStyle(.plain)
                     .font(DS.Font.body)
                     .foregroundStyle(DS.Color.ink)
@@ -190,166 +404,99 @@ struct TranscriptionDetail: View {
                     .onSubmit(runCustom)
                 ActionButton(
                     title: "Run",
-                    kind: .secondary,
+                    kind: .primary,
                     isEnabled: canRun && !instruction.trimmed.isEmpty,
                     action: runCustom
                 )
-                // Only when there's a choice to make. One engine available is not a choice.
-                if isCloudReady, OnDeviceRewriter.isAvailable {
-                    Segmented(
-                        options: [(.cloud, "Cloud"), (.onDevice, "On-device")],
-                        selection: $engine
-                    )
-                    .fixedSize()
-                }
             }
 
             if let blocked = blockedReason {
                 Text(blocked)
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                MetaLabel(text: "Rewriting from: \(sourceLabel)")
             }
         }
         .padding(DS.Space.base)
-    }
-
-    private var empty: some View {
-        VStack(spacing: DS.Space.snug) {
-            Text("No rewrites yet")
-                .font(DS.Font.display)
-                .foregroundStyle(DS.Color.ink)
-            Text("Run a mode, or write your own instruction.\nEvery version you run is kept here.")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
-    private var reader: some View {
-        if isComparing {
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.wide) {
-                    ForEach(versions) { version in
-                        VStack(alignment: .leading, spacing: DS.Space.snug) {
-                            HStack(spacing: DS.Space.snug) {
-                                Text(version.instruction)
-                                    .font(DS.Font.bodyEmphasis)
-                                    .foregroundStyle(DS.Color.ink)
-                                    .lineLimit(1)
-                                versionMeta(version)
-                            }
-                            versionBody(version)
-                        }
-                    }
-                }
-                .padding(DS.Space.base)
-            }
-        } else if let current {
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                HStack(spacing: DS.Space.snug) {
-                    versionMeta(current)
-                    Spacer()
-                    if let text = current.text { CopyButton(text: text) }
-                    ActionButton(title: "Delete", kind: .quiet) { delete(current) }
-                }
-                ScrollView {
-                    versionBody(current)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(DS.Space.base)
-        }
-    }
-
-    /// What produced this version and when. The name is on its tab, so it isn't repeated.
-    private func versionMeta(_ version: Version) -> some View {
-        HStack(spacing: DS.Space.snug) {
-            Text(version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
-                .lineLimit(1)
-            if isComparing, let text = version.text {
-                Spacer()
-                CopyButton(text: text)
-                ActionButton(title: "Delete", kind: .quiet) { delete(version) }
-            }
-        }
-    }
-
-    /// Every version, newest first. A word with a rule under it — the same idiom as the
-    /// window's own tabs, because that is what these are: places to look, not actions.
-    private var rail: some View {
-        HStack(alignment: .center, spacing: DS.Space.snug) {
-            Flow(spacing: DS.Space.roomy, lineSpacing: DS.Space.tight) {
-                ForEach(versions) { version in
-                    versionTab(version)
-                }
-            }
-            Spacer(minLength: 0)
-            if versions.count > 1 {
-                ActionButton(title: isComparing ? "One at a time" : "Compare all", kind: .quiet) {
-                    withAnimation(DS.Motion.panel) { isComparing.toggle() }
-                }
-            }
-        }
-        .padding(.horizontal, DS.Space.base)
-        .padding(.top, DS.Space.snug)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.surface)
+        .overlay(alignment: .top) { Hairline() }
     }
 
-    private func versionTab(_ version: Version) -> some View {
-        let isCurrent = !isComparing && current?.id == version.id
-        let tint = version.failure == nil
-            ? (isCurrent ? DS.Color.ink : DS.Color.inkFaint)
-            : DS.Color.caution
-        return Button {
-            withAnimation(DS.Motion.press) {
-                isComparing = false
-                selected = version.id
+    /// Writes the open editor back to whichever version it belongs to.
+    ///
+    /// Three destinations, because the three kinds are stored differently: the transcript
+    /// is the run's own text (or its `original` when cleanup produced a second copy), the
+    /// landed version is that cleaned text, and a rewrite lives in the run's rewrite list.
+    private func saveEdit(of entry: Entry) {
+        let edited = draft
+        switch entry.kind {
+        case .spoken:
+            source = edited
+            saveCorrection()
+        case .landed:
+            RunLog.modify(runID) { $0.text = edited }
+        case .rewrite:
+            RunLog.modify(runID) { run in
+                guard let index = run.rewrites?.firstIndex(where: { $0.id == entry.id }) else { return }
+                let old = run.rewrites![index]
+                // `Rewrite` is immutable by design — replaced rather than mutated, so the
+                // stored shape stays the one the log was written with.
+                run.rewrites![index] = Rewrite(
+                    id: old.id,
+                    date: old.date,
+                    instruction: old.instruction,
+                    engine: old.engine,
+                    source: old.source,
+                    text: edited
+                )
             }
-        } label: {
-            VStack(spacing: DS.Space.tight) {
-                HStack(spacing: DS.Space.tight) {
-                    if version.text == nil, version.failure == nil {
-                        ProgressView().controlSize(.mini).scaleEffect(0.6)
-                    }
-                    Text(version.instruction)
-                        .font(DS.Font.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .foregroundStyle(tint)
-                }
-                .frame(maxWidth: 180)
-                Rectangle()
-                    .fill(isCurrent ? DS.Color.ink : Color.clear)
-                    .frame(height: DS.Border.emphasis)
-            }
-            .fixedSize()
         }
-        .buttonStyle(.plain)
-        .help(version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
+        withAnimation(DS.Motion.panel) { editingID = nil }
     }
 
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    // MARK: - Dictionary
+
+    /// What the dictionary changed in this transcript, which is the only place the user can
+    /// see a rule actually earning its place.
     @ViewBuilder
-    private func versionBody(_ version: Version) -> some View {
-        if let failure = version.failure {
-            Text(failure)
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.caution)
-        } else if let text = version.text {
-            Text(text)
-                .font(DS.Font.prose)
-                .lineSpacing(DS.Font.proseLeading)
-                .foregroundStyle(DS.Color.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: DS.Font.proseMeasure, alignment: .leading)
-        } else {
-            Text("Rewriting…")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
+    private var dictionarySection: some View {
+        if let corrections = run?.corrections, !corrections.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                HStack {
+                    MetaLabel(text: "Dictionary fired")
+                    Spacer()
+                    ActionButton(title: "Open in Dictionary", kind: .quiet) {
+                        MainRoute.shared.section = .dictionary
+                    }
+                }
+                Flow(spacing: DS.Space.snug) {
+                    ForEach(corrections, id: \.self) { correction in
+                        HStack(spacing: DS.Space.tight) {
+                            Text(correction.from)
+                                .strikethrough()
+                                .foregroundStyle(DS.Color.inkFaint)
+                            Text(correction.to)
+                                .foregroundStyle(DS.Color.ink)
+                            if correction.count > 1 {
+                                MetaLabel(text: "×\(correction.count)")
+                            }
+                        }
+                        .font(DS.Font.caption)
+                        .padding(.horizontal, DS.Space.snug)
+                        .padding(.vertical, DS.Space.hair)
+                        .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.chip))
+                    }
+                }
+            }
+            .padding(.horizontal, DS.Space.base)
         }
     }
 
@@ -365,13 +512,13 @@ struct TranscriptionDetail: View {
     }
 
     private var canRun: Bool {
-        (engine == .cloud ? isCloudReady : OnDeviceRewriter.isAvailable) && !source.trimmed.isEmpty
+        (engine == .cloud ? isCloudReady : OnDeviceRewriter.isAvailable) && !sourceText.trimmed.isEmpty
     }
 
     /// Why the buttons are dead, when they are. Silence here reads as a broken page.
     private var blockedReason: String? {
         if canRun { return nil }
-        if source.trimmed.isEmpty { return "Nothing to rewrite." }
+        if sourceText.trimmed.isEmpty { return "Nothing to rewrite." }
         if engine == .onDevice { return OnDeviceRewriter.unavailableReason }
         if OnDeviceRewriter.isAvailable {
             return "Cloud rewrite isn't set up. Switch to on-device, or add a key in Settings."
@@ -414,19 +561,24 @@ struct TranscriptionDetail: View {
         start(label: typed, system: RewriteMode.customSystemPrompt(typed), checking: nil)
     }
 
+    /// ⌘⌥R in Recent asks for a rewrite without opening the page first. Consumed once —
+    /// leaving it set would rerun on every redraw.
+    private func runRequestedRewrite() {
+        guard MainRoute.shared.rewriteRequest == runID else { return }
+        MainRoute.shared.rewriteRequest = nil
+        start(settings.rewriteMode)
+    }
+
     private func start(_ mode: RewriteMode) {
         start(label: mode.displayName, system: mode.systemPrompt, checking: mode)
     }
 
     private func start(label: String, system: String, checking mode: RewriteMode?) {
-        let text = source.trimmed
+        let text = sourceText.trimmed
         guard canRun, !text.isEmpty else { return }
 
         let item = Version(id: UUID(), instruction: label, engine: engineLabel)
         pending.insert(item, at: 0)
-        // Reading a version you didn't ask for is worse than reading nothing, so a running
-        // rewrite takes the pane only when nothing has been chosen yet.
-        if selected == nil || versions.count == 1 { selected = item.id }
 
         let engine = self.engine
         let provider = settings.aiProvider
@@ -457,7 +609,8 @@ struct TranscriptionDetail: View {
                     text: output
                 )
                 RunLog.modify(runID) { $0.rewrites = ($0.rewrites ?? []) + [stored] }
-                // Follow the selection across: the chip the user is looking at is this run.
+                // Follow the selection across, so a rewrite of a rewrite keeps aiming at
+                // the version the user was reading.
                 if selected == item.id { selected = stored.id }
                 pending.removeAll { $0.id == item.id }
             } catch {

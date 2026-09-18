@@ -34,12 +34,29 @@ let package = Package(
             path: "Sources/OrbitFlowHotkey",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The week's statistics are their own target for the same reason the dictionary is:
+        // a median, a share and a word count are worth testing against fixed samples, and
+        // an executable target cannot be imported by a test target.
+        .target(
+            name: "OrbitFlowStats",
+            path: "Sources/OrbitFlowStats",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Sessions and filters: "ten minutes continues a session, eleven starts a new one"
+        // is a decision worth pinning with a test rather than rediscovering from a screen.
+        .target(
+            name: "OrbitFlowHistory",
+            path: "Sources/OrbitFlowHistory",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
                 "OrbitFlowDictionary",
                 "OrbitFlowAIRewrite",
                 "OrbitFlowHotkey",
+                "OrbitFlowStats",
+                "OrbitFlowHistory",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -64,6 +81,18 @@ let package = Package(
             name: "OrbitFlowHotkeyTests",
             dependencies: ["OrbitFlowHotkey"],
             path: "Tests/OrbitFlowHotkeyTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowHistoryTests",
+            dependencies: ["OrbitFlowHistory"],
+            path: "Tests/OrbitFlowHistoryTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowStatsTests",
+            dependencies: ["OrbitFlowStats"],
+            path: "Tests/OrbitFlowStatsTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

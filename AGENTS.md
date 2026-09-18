@@ -127,20 +127,31 @@ and type token. `UI/Components.swift` holds the vocabulary built from them. **Vi
 contain literal values.** If a component needs a number that isn't a token, add the token
 rather than inlining it.
 
-The direction is **quiet instrument**. The app's job is to disappear — you hold a key, speak,
-and text lands in someone else's window — so the interface is mostly negative space with one
-live element in it. Cool graphite in dark appearance, warm-neutral paper in light. Four rules
-that are not negotiable:
+The direction is **quiet instrument with a legible pulse** (Foundation 1.0, designed in
+Claude Design; see `docs/superpowers/specs/2026-09-17-design-system-foundation-design.md`).
+Flat surfaces, hairline separation, one live element. Warm paper in light appearance, warm
+graphite in dark. Three bundled faces: **Instrument Sans** for interface, **Newsreader** for
+prose and display lines, **JetBrains Mono** for instrumentation. They live in
+`Resources/Fonts` and are registered by `ATSApplicationFontsPath`, so nothing is installed
+into the user's Font Book, and every role falls back to the system face if the files are
+missing.
 
-- **One accent.** `DS.Color.signal` is red, it means recording, and nothing else in the app is
-  ever red. Selection, focus and hover are carried by surface and weight, never by hue. Errors
-  are `caution` amber, deliberately — a failed dictation lighting the same lamp as a live one
-  is worse than no lamp.
-- **Transcribed text is prose.** Serif (`DS.Font.prose`), extra leading, capped measure. It's
-  writing, not log output. Interface chrome stays in the system sans.
-- **Sentence case.** No tracked-out uppercase labels anywhere.
-- **Depth is one step.** A hairline and a shade. No bevels, no glow, and **no gradients** —
-  there were purple ones in the skeleton and they are gone.
+Five rules, none negotiable:
+
+- **01 Hue never carries state.** Surface and weight do. `DS.Color.signal` is red, it means
+  recording, and nothing else in the app is ever red. `positive` green and `caution` amber
+  appear on status indicators only, never as chrome — and never as the only signal, because
+  a dot alone can't be read by everyone. The words next to it say the same thing.
+- **02 Prose is serif**, capped at 66 characters (`DS.Font.proseMeasure`), with extra
+  leading. It's writing, not log output.
+- **03 All metadata is mono**, 10–11pt, uppercase, in a fixed slot — timings, counts,
+  engine names, statuses. Use `MetaLabel`, which uppercases for you and holds the slot's
+  width so a row doesn't twitch when a value changes. Everything else is sentence case:
+  headings, buttons, body text, settings labels, help notes. Help notes are `DS.Font.caption`
+  and stay sans — a sentence is not metadata.
+- **04 One helper line per setting.** Anything longer goes behind a "?".
+- **05 Only the waveform moves on its own.** Depth is one step: a hairline and a shade. No
+  bevels, no glow, and **no gradients**.
 
 `Waveform` in `Components.swift` is the only thing that animates on its own, because it is
 showing live input. It samples at a fixed `DS.Motion.traceHz` rather than once per frame, so

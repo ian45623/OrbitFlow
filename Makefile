@@ -127,6 +127,9 @@ app: build
 	@# The commit count is the build number the in-app updater compares against.
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" "$(CONTENTS)/Info.plist"
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$(CONTENTS)/Resources/"; fi
+	@# The three bundled faces. `ATSApplicationFontsPath` in Info.plist points here, so
+	@# AppKit registers them at launch — no code, and no install into the user's Font Book.
+	@cp -R Resources/Fonts "$(CONTENTS)/Resources/Fonts"
 	@printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	@# Belt and braces: the staging dir isn't synced, but the copied binary can still carry
 	@# xattrs inherited from the synced .build directory.

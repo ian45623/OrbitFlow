@@ -47,7 +47,8 @@ public struct DictionaryCorrector: Sendable {
             .sorted { $0.hear.count > $1.hear.count }
 
         rules = corrections.compactMap { entry in
-            guard let regex = Self.makeRegex(for: entry.hear) else { return nil }
+            guard let regex = Self.makeRegex(for: entry.hear, requiringPhrase: entry.requiresPhrase)
+            else { return nil }
             return Rule(
                 regex: regex,
                 replacement: NSRegularExpression.escapedTemplate(for: entry.write),
@@ -109,7 +110,10 @@ public struct DictionaryCorrector: Sendable {
     /// trailing hyphen or apostrophe as a boundary and let a rule bite into a longer word;
     /// requiring that no letter or digit sits on either side is the stricter guarantee, and
     /// it's what keeps "cloud code" off "Cloudflare".
-    private static func makeRegex(for trigger: String) -> NSRegularExpression? {
+    private static func makeRegex(
+        for trigger: String,
+        requiringPhrase: Bool = false
+    ) -> NSRegularExpression? {
         // NFC here too, matching `apply(to:)` — a trigger typed into the UI and a trigger read
         // back from the dictionary file can arrive in different normal forms.
         let parts = trigger
@@ -120,7 +124,10 @@ public struct DictionaryCorrector: Sendable {
 
         guard !parts.isEmpty else { return nil }
 
-        let body = parts.joined(separator: "[\\s\\-]*")
+        // The gap is optional by default, so a phrase still matches when the engine glues
+        // it into one word. An entry that requires its phrase demands a real separator, which
+        // is the only way to stop a glued form that happens to be a word of its own.
+        let body = parts.joined(separator: requiringPhrase ? "[\\s\\-]+" : "[\\s\\-]*")
         let pattern = "(?<![\\p{L}\\p{N}])\(body)(?![\\p{L}\\p{N}])"
 
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])

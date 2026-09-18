@@ -28,12 +28,28 @@ public struct DictionaryEntry: Identifiable, Codable, Hashable, Sendable {
     /// whether a rule is helping without deleting it.
     public var isEnabled: Bool
 
-    public init(id: UUID = UUID(), kind: Kind, write: String, hear: String = "", isEnabled: Bool = true) {
+    /// For `.correction` only: match the gap between the phrase's words as a *real*
+    /// separator rather than an optional one.
+    ///
+    /// By default "super base" also matches the single word "superbase", because engines
+    /// glue words together. When that glued form is itself a word, the rule fires on text
+    /// the user meant to keep — this turns that off for the one entry that needs it.
+    public var requiresPhrase: Bool
+
+    public init(
+        id: UUID = UUID(),
+        kind: Kind,
+        write: String,
+        hear: String = "",
+        isEnabled: Bool = true,
+        requiresPhrase: Bool = false
+    ) {
         self.id = id
         self.kind = kind
         self.write = write
         self.hear = hear
         self.isEnabled = isEnabled
+        self.requiresPhrase = requiresPhrase
     }
 
     public static func term(_ word: String) -> DictionaryEntry {
@@ -45,8 +61,12 @@ public struct DictionaryEntry: Identifiable, Codable, Hashable, Sendable {
     }
 
     /// How this entry reads in the plain-text file.
+    ///
+    /// `=>` rather than `->` for an entry that requires its phrase: a second arrow keeps
+    /// old files parsing unchanged and stays readable to someone editing the file by hand.
     public var fileLine: String {
-        let body = kind == .correction ? "\(hear) -> \(write)" : write
+        let arrow = requiresPhrase ? "=>" : "->"
+        let body = kind == .correction ? "\(hear) \(arrow) \(write)" : write
         return isEnabled ? body : "# off: \(body)"
     }
 }
@@ -81,6 +101,13 @@ public struct DictionaryWarning: Identifiable, Sendable {
     ]
 
     /// - Returns: warnings for `entry`, or empty if it looks safe.
+    /// Whether a trigger is an ordinary English word, and so would fire constantly.
+    /// Shared with `DictionaryEvidence.risk`, which asks the same question about entries
+    /// that already exist rather than about one being added.
+    public static func isCommonWord(_ word: String) -> Bool {
+        common.contains(word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
     public static func check(_ entry: DictionaryEntry) -> [DictionaryWarning] {
         // Only the trigger side can misfire. A `.term` is never matched against text.
         guard entry.kind == .correction else { return [] }
