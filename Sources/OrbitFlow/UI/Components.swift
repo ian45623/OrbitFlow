@@ -27,10 +27,16 @@ struct Surface<Content: View>: View {
 /// The horizontal hairline that separates rows and sections. Rows are separated rather
 /// than boxed — a list of transcripts is one document, not a stack of cards.
 struct Hairline: View {
+    /// Vertical when it separates panes rather than rows.
+    var vertical = false
+
     var body: some View {
         Rectangle()
             .fill(DS.Color.line)
-            .frame(height: DS.Border.hairline)
+            .frame(
+                width: vertical ? DS.Border.hairline : nil,
+                height: vertical ? nil : DS.Border.hairline
+            )
     }
 }
 
