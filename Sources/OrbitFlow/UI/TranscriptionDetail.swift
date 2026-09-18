@@ -33,8 +33,9 @@ struct TranscriptionDetail: View {
     /// Runs that haven't landed yet, newest first. Successful ones move to the stored list.
     @State private var pending: [Version] = []
     @State private var selected: UUID?
-    /// Read all versions in one scroll instead of one at a time.
-    @State private var isComparing = false
+    /// The transcript is read by default and edited on request: correcting a misheard word
+    /// is rare, and a text box where a paragraph should be reads as a form to fill in.
+    @State private var isEditing = false
     @State private var engine: Engine = .cloud
     /// Read once rather than per redraw: this is a file read, not a property.
     @State private var hasKey = false
@@ -66,13 +67,28 @@ struct TranscriptionDetail: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
-            HStack(spacing: 0) {
-                sourceColumn
-                    .frame(width: 320)
-                Divider()
-                versionColumn
-                    .frame(maxWidth: .infinity)
+            Hairline()
+            ScrollView {
+                VStack(alignment: .leading, spacing: DS.Space.wide) {
+                    transcriptSection
+                    Hairline()
+                    modesSection
+                    if let blocked = blockedReason {
+                        Text(blocked)
+                            .font(DS.Font.caption)
+                            .foregroundStyle(DS.Color.caution)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    versionsSection
+                    dictionarySection
+                }
+                .padding(DS.Space.wide)
+                // One column, capped at a readable measure. The two-column layout this
+                // replaced assumed a full window; in a pane beside a list it made the
+                // transcript — the thing you are here to read — the narrowest thing on
+                // screen, and stacked every control into a clipped vertical strip.
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .background(DS.Color.canvas)
@@ -84,6 +100,7 @@ struct TranscriptionDetail: View {
             pending = []
             selected = nil
             instruction = ""
+            isEditing = false
             hasKey = KeyStore.hasKey(account: settings.aiProvider.rawValue)
             if !isCloudReady, OnDeviceRewriter.isAvailable { engine = .onDevice }
             source = run.map { $0.original ?? $0.text } ?? ""
@@ -95,22 +112,37 @@ struct TranscriptionDetail: View {
 
     // MARK: - Header
 
+    /// One line: what produced this and where it went, then the three things you do to it.
+    /// Everything rarer lives behind the ⋯, so the row never wraps in a narrow pane.
     private var header: some View {
         HStack(spacing: DS.Space.snug) {
-            ActionButton(title: "History", systemImage: "chevron.left", kind: .quiet, action: onBack)
-            Spacer()
             if let run {
+                MetaLabel(text: [
+                    run.engine,
+                    run.date.formatted(.dateTime.month().day().hour().minute()),
+                    run.destinationApp.map { "landed in \($0)" },
+                ].compactMap { $0 }.joined(separator: " · "))
+                .layoutPriority(-1)
+
+                Spacer(minLength: DS.Space.snug)
+
+                ActionButton(
+                    title: (run.isPinned ?? false) ? "Unpin" : "Pin",
+                    kind: .secondary
+                ) {
+                    RunLog.modify(run.id) { $0.isPinned = !($0.isPinned ?? false) }
+                }
+
                 // Reads whatever the page is showing: the selected rewrite if there is one,
-                // otherwise the text on the left. Replaying doesn't file a new entry — this
-                // one is already in History.
+                // otherwise the transcript. Replaying doesn't file a new entry — this one is
+                // already in History.
                 let spoken = current?.text ?? source
                 // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
                 // before a sound is made, and a second press during that window would
                 // cancel a request already billed and send a duplicate.
                 ActionButton(
                     title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Read aloud",
-                    systemImage: speaker.isSpeaking || speaker.isPreparing ? "stop.fill" : "play.fill",
-                    kind: .quiet,
+                    kind: .secondary,
                     isEnabled: speaker.isSpeaking || speaker.isPreparing || !spoken.trimmed.isEmpty
                 ) {
                     if speaker.isSpeaking || speaker.isPreparing {
@@ -119,81 +151,109 @@ struct TranscriptionDetail: View {
                         speaker.speak(spoken)
                     }
                 }
-                ActionButton(
-                    title: (run.isPinned ?? false) ? "Unpin" : "Pin",
-                    kind: .quiet
-                ) {
-                    RunLog.modify(run.id) { $0.isPinned = !($0.isPinned ?? false) }
+
+                ActionButton(title: "Copy", kind: .primary) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(current?.text ?? source, forType: .string)
                 }
-                MetaLabel(text: [
-                    run.engine,
-                    run.date.formatted(.dateTime.month().day().hour().minute()),
-                    run.destinationApp.map { "landed in \($0)" },
-                ].compactMap { $0 }.joined(separator: " · "))
+
+                Menu {
+                    Button("Reveal dictionary file") {
+                        NSWorkspace.shared.activateFileViewerSelecting([DictionaryStore.fileURL])
+                    }
+                    Divider()
+                    Button("Delete this dictation", role: .destructive) {
+                        RunLog.delete(run)
+                        onBack()
+                    }
+                } label: {
+                    Text("⋯")
+                        .font(DS.Font.bodyEmphasis)
+                        .foregroundStyle(DS.Color.inkMuted)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
         }
+        .lineLimit(1)
         .padding(.horizontal, DS.Space.base)
-        .padding(.vertical, DS.Space.tight)
+        .padding(.vertical, DS.Space.snug)
         .background(DS.Color.surface)
     }
 
-    // MARK: - Left: the transcript and the controls
+    // MARK: - Transcript
 
-    private var sourceColumn: some View {
-        VStack(alignment: .leading, spacing: DS.Space.tight) {
-            HStack(spacing: DS.Space.snug) {
-                Text("What you said")
-                    .font(DS.Font.label)
-                    .foregroundStyle(DS.Color.inkMuted)
-                Spacer()
-                if source != savedSource {
+    private var transcriptSection: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
+            HStack(spacing: DS.Space.base) {
+                MetaLabel(text: "Transcript")
+                ActionButton(title: isEditing ? "Done" : "Edit", kind: .quiet) {
+                    if isEditing, source != savedSource { saveCorrection() }
+                    withAnimation(DS.Motion.panel) { isEditing.toggle() }
+                }
+                if isEditing, source != savedSource {
                     ActionButton(title: "Revert", kind: .quiet) { source = savedSource }
-                    ActionButton(title: "Save", kind: .quiet, action: saveCorrection)
-                } else {
-                    CopyButton(text: source)
+                }
+                Spacer()
+                if let run {
+                    MetaLabel(text: "\(wordCount) words · \(Int(run.audioSeconds.rounded()))s audio")
                 }
             }
-            ProseEditor(text: $source, minHeight: 120)
-                .frame(maxHeight: .infinity)
-            Text("Fix a misheard word here, then rewrite from the corrected text.")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
-        }
-        .padding(DS.Space.base)
-    }
 
-    // MARK: - Right: the versions
-
-    private var versionColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            controls
-            Divider()
-            if versions.isEmpty {
-                empty
+            if isEditing {
+                ProseEditor(text: $source, minHeight: 140)
+                Text("Fix a misheard word here, then rewrite from the corrected text.")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkFaint)
             } else {
-                rail
-                Divider()
-                reader
+                Text(source)
+                    .font(DS.Font.display)
+                    .lineSpacing(DS.Font.proseLeading)
+                    .foregroundStyle(DS.Color.ink)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    /// Everything that starts a rewrite, in one block at the top of the column.
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: DS.Space.snug) {
-            Flow {
-                ActionButton(title: "All modes", kind: .primary, isEnabled: canRun) {
-                    for mode in RewriteMode.allCases { start(mode) }
-                }
-                ForEach(RewriteMode.allCases, id: \.self) { mode in
-                    ActionButton(title: mode.displayName, kind: .secondary, isEnabled: canRun) {
-                        start(mode)
+    private var wordCount: Int {
+        source.split(whereSeparator: \.isWhitespace).count
+    }
+
+    // MARK: - Rewriting
+
+    /// The modes on one line, the instruction under them, and what will run it on the
+    /// right — so the choice and the thing making the choice are never separated.
+    private var modesSection: some View {
+        VStack(alignment: .leading, spacing: DS.Space.base) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.base) {
+                Flow(spacing: DS.Space.snug) {
+                    ForEach(RewriteMode.allCases, id: \.self) { mode in
+                        ActionButton(title: mode.displayName, kind: .secondary, isEnabled: canRun) {
+                            start(mode)
+                        }
+                    }
+                    ActionButton(title: "All modes", kind: .quiet, isEnabled: canRun) {
+                        for mode in RewriteMode.allCases { start(mode) }
                     }
                 }
+                Spacer(minLength: DS.Space.snug)
+                // Only when there's a choice to make. One engine available is not a choice.
+                if isCloudReady, OnDeviceRewriter.isAvailable {
+                    Segmented(
+                        options: [(.cloud, "Cloud"), (.onDevice, "On-device")],
+                        selection: $engine
+                    )
+                    .fixedSize()
+                } else {
+                    MetaLabel(text: engineLabel)
+                }
             }
 
             HStack(spacing: DS.Space.snug) {
-                TextField("Or write an instruction — turn this into short bullet points", text: $instruction)
+                TextField("Ask for something else — “tighten this to one line”", text: $instruction)
                     .textFieldStyle(.plain)
                     .font(DS.Font.body)
                     .foregroundStyle(DS.Color.ink)
@@ -211,140 +271,55 @@ struct TranscriptionDetail: View {
                     isEnabled: canRun && !instruction.trimmed.isEmpty,
                     action: runCustom
                 )
-                // Only when there's a choice to make. One engine available is not a choice.
-                if isCloudReady, OnDeviceRewriter.isAvailable {
-                    Segmented(
-                        options: [(.cloud, "Cloud"), (.onDevice, "On-device")],
-                        selection: $engine
-                    )
-                    .fixedSize()
-                }
-            }
-
-            if let blocked = blockedReason {
-                Text(blocked)
-                    .font(DS.Font.caption)
-                    .foregroundStyle(DS.Color.caution)
             }
         }
-        .padding(DS.Space.base)
     }
 
-    private var empty: some View {
-        VStack(spacing: DS.Space.snug) {
-            Text("No rewrites yet")
-                .font(DS.Font.display)
-                .foregroundStyle(DS.Color.ink)
-            Text("Run a mode, or write your own instruction.\nEvery version you run is kept here.")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkFaint)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+    // MARK: - Versions
 
+    /// Every rewrite, newest first, read straight down the column.
+    ///
+    /// This replaced a tab rail: with four modes and a custom instruction the tabs wrapped
+    /// into three clipped rows in a pane this width, and hid every version but one behind a
+    /// click. Reading them in sequence is the whole point of running more than one.
     @ViewBuilder
-    private var reader: some View {
-        if isComparing {
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.wide) {
-                    ForEach(versions) { version in
-                        VStack(alignment: .leading, spacing: DS.Space.snug) {
-                            HStack(spacing: DS.Space.snug) {
-                                Text(version.instruction)
-                                    .font(DS.Font.bodyEmphasis)
-                                    .foregroundStyle(DS.Color.ink)
-                                    .lineLimit(1)
-                                versionMeta(version)
-                            }
-                            versionBody(version)
-                        }
-                    }
-                }
-                .padding(DS.Space.base)
-            }
-        } else if let current {
+    private var versionsSection: some View {
+        if versions.isEmpty {
             VStack(alignment: .leading, spacing: DS.Space.snug) {
-                HStack(spacing: DS.Space.snug) {
-                    versionMeta(current)
-                    Spacer()
-                    if let text = current.text { CopyButton(text: text) }
-                    ActionButton(title: "Delete", kind: .quiet) { delete(current) }
-                }
-                ScrollView {
-                    versionBody(current)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                MetaLabel(text: "No rewrites yet")
+                Text("Run a mode, or write your own instruction. Every version you run is kept here.")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkFaint)
             }
-            .padding(DS.Space.base)
-        }
-    }
-
-    /// What produced this version and when. The name is on its tab, so it isn't repeated.
-    private func versionMeta(_ version: Version) -> some View {
-        HStack(spacing: DS.Space.snug) {
-            MetaLabel(text: version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
-                .lineLimit(1)
-            if isComparing, let text = version.text {
-                Spacer()
-                CopyButton(text: text)
-                ActionButton(title: "Delete", kind: .quiet) { delete(version) }
-            }
-        }
-    }
-
-    /// Every version, newest first. A word with a rule under it — the same idiom as the
-    /// window's own tabs, because that is what these are: places to look, not actions.
-    private var rail: some View {
-        HStack(alignment: .center, spacing: DS.Space.snug) {
-            Flow(spacing: DS.Space.roomy, lineSpacing: DS.Space.tight) {
+        } else {
+            VStack(alignment: .leading, spacing: DS.Space.wide) {
                 ForEach(versions) { version in
-                    versionTab(version)
-                }
-            }
-            Spacer(minLength: 0)
-            if versions.count > 1 {
-                ActionButton(title: isComparing ? "One at a time" : "Compare all", kind: .quiet) {
-                    withAnimation(DS.Motion.panel) { isComparing.toggle() }
+                    VStack(alignment: .leading, spacing: DS.Space.snug) {
+                        HStack(spacing: DS.Space.snug) {
+                            Text(version.instruction)
+                                .font(DS.Font.bodyEmphasis)
+                                .foregroundStyle(DS.Color.ink)
+                                .lineLimit(1)
+                            versionMeta(version)
+                            Spacer()
+                            if let text = version.text { CopyButton(text: text) }
+                            ActionButton(title: "Delete", kind: .quiet) { delete(version) }
+                        }
+                        versionBody(version)
+                    }
+                    .onTapGesture { selected = version.id }
                 }
             }
         }
-        .padding(.horizontal, DS.Space.base)
-        .padding(.top, DS.Space.snug)
-        .background(DS.Color.surface)
     }
 
-    private func versionTab(_ version: Version) -> some View {
-        let isCurrent = !isComparing && current?.id == version.id
-        let tint = version.failure == nil
-            ? (isCurrent ? DS.Color.ink : DS.Color.inkFaint)
-            : DS.Color.caution
-        return Button {
-            withAnimation(DS.Motion.press) {
-                isComparing = false
-                selected = version.id
-            }
-        } label: {
-            VStack(spacing: DS.Space.tight) {
-                HStack(spacing: DS.Space.tight) {
-                    if version.text == nil, version.failure == nil {
-                        ProgressView().controlSize(.mini).scaleEffect(0.6)
-                    }
-                    Text(version.instruction)
-                        .font(DS.Font.label)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .foregroundStyle(tint)
-                }
-                .frame(maxWidth: 180)
-                Rectangle()
-                    .fill(isCurrent ? DS.Color.ink : Color.clear)
-                    .frame(height: DS.Border.emphasis)
-            }
-            .fixedSize()
-        }
-        .buttonStyle(.plain)
-        .help(version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" } ?? version.engine)
+    /// What produced this version and when.
+    private func versionMeta(_ version: Version) -> some View {
+        MetaLabel(
+            text: version.date.map { "\(version.engine) · \($0.formatted(.dateTime.hour().minute()))" }
+                ?? version.engine
+        )
+        .lineLimit(1)
     }
 
     @ViewBuilder
@@ -360,9 +335,46 @@ struct TranscriptionDetail: View {
                 .foregroundStyle(DS.Color.ink)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: DS.Font.proseMeasure, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             MetaLabel(text: "Rewriting…")
+        }
+    }
+
+    // MARK: - Dictionary
+
+    /// What the dictionary changed in this transcript, which is the only place the user can
+    /// see a rule actually earning its place.
+    @ViewBuilder
+    private var dictionarySection: some View {
+        if let corrections = run?.corrections, !corrections.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                HStack {
+                    MetaLabel(text: "Dictionary fired")
+                    Spacer()
+                    ActionButton(title: "Open in Dictionary", kind: .quiet) {
+                        MainRoute.shared.section = .dictionary
+                    }
+                }
+                Flow(spacing: DS.Space.snug) {
+                    ForEach(corrections, id: \.self) { correction in
+                        HStack(spacing: DS.Space.tight) {
+                            Text(correction.from)
+                                .strikethrough()
+                                .foregroundStyle(DS.Color.inkFaint)
+                            Text(correction.to)
+                                .foregroundStyle(DS.Color.ink)
+                            if correction.count > 1 {
+                                MetaLabel(text: "×\(correction.count)")
+                            }
+                        }
+                        .font(DS.Font.caption)
+                        .padding(.horizontal, DS.Space.snug)
+                        .padding(.vertical, DS.Space.hair)
+                        .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.chip))
+                    }
+                }
+            }
         }
     }
 
