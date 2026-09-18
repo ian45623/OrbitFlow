@@ -19,14 +19,11 @@ struct RecentPane: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            FilterRail(
-                filter: $filter,
-                counts: History.counts(for: items),
-                destinations: History.destinations(in: items)
-            )
+            FilterRail(filter: $filter, counts: History.counts(for: items))
+                .layoutPriority(2)
             Hairline(vertical: true)
             SessionList(
-                sessions: sessions,
+                items: visibleItems,
                 selection: $selection,
                 query: $query,
                 isSearchFocused: $isSearchFocused,
@@ -34,6 +31,7 @@ struct RecentPane: View {
                 shortcutSummary: ShortcutKeys.displaySummary(settings.shortcutKeys)
             )
             .frame(width: 340)
+            .layoutPriority(1)
             Hairline(vertical: true)
             detail
         }
@@ -43,7 +41,7 @@ struct RecentPane: View {
             // is the same thing clicking it here does.
             if let opened { selection = opened }
         }
-        .onAppear { if selection == nil { selection = sessions.first?.items.first?.id } }
+        .onAppear { if selection == nil { selection = visibleItems.first?.id } }
         .background {
             // Shortcut hosts. Buttons rather than `.keyboardShortcut` on the views
             // themselves, because the rail advertises these three and they have to work
@@ -76,7 +74,7 @@ struct RecentPane: View {
             // of editor state — across every selection, which is how an edit to one
             // transcript could land on another.
             .id(selection)
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: 360, maxWidth: .infinity)
         } else {
             EmptyPanel(
                 label: store.runs.isEmpty ? "Nothing dictated yet" : "Nothing selected",
@@ -104,14 +102,16 @@ struct RecentPane: View {
         }
     }
 
-    private var sessions: [HistorySession] {
+    /// Filtered, then searched, newest first. One flat list: dictations arrive one at a
+    /// time and reading them in order is the whole job — grouping them into sessions put a
+    /// header between rows that belong together.
+    private var visibleItems: [HistoryItem] {
         let filtered = History.matching(filter, in: items)
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return History.sessions(filtered) }
-        let matching = filtered.filter { item in
+        let matching = trimmed.isEmpty ? filtered : filtered.filter { item in
             store.runs.first { $0.id == item.id }?.text.localizedStandardContains(trimmed) ?? false
         }
-        return History.sessions(matching)
+        return matching.sorted { $0.date > $1.date }
     }
 
     private func copySelection() {
@@ -131,7 +131,6 @@ struct RecentPane: View {
 struct FilterRail: View {
     @Binding var filter: HistoryFilter
     let counts: [HistoryFilter: Int]
-    let destinations: [(name: String, count: Int)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -141,13 +140,6 @@ struct FilterRail: View {
             row(.rewritten, "Rewritten")
             row(.corrected, "Corrected")
             row(.longForm, "Long form")
-
-            if !destinations.isEmpty {
-                heading("Landed in")
-                ForEach(destinations, id: \.name) { destination in
-                    row(.destination(destination.name), destination.name, count: destination.count)
-                }
-            }
 
             Spacer()
 
@@ -161,6 +153,9 @@ struct FilterRail: View {
         .frame(width: 200, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.Color.surface)
+        // Fixed, and it means it: without this the transcript's ideal width won the layout
+        // and the rail was pushed off the left edge of the window.
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func heading(_ text: String) -> some View {
@@ -170,7 +165,7 @@ struct FilterRail: View {
             .padding(.bottom, DS.Space.snug)
     }
 
-    private func row(_ candidate: HistoryFilter, _ label: String, count: Int? = nil) -> some View {
+    private func row(_ candidate: HistoryFilter, _ label: String) -> some View {
         Button {
             filter = candidate
         } label: {
@@ -180,7 +175,7 @@ struct FilterRail: View {
                     .foregroundStyle(DS.Color.ink)
                     .lineLimit(1)
                 Spacer(minLength: DS.Space.tight)
-                MetaLabel(text: "\(count ?? counts[candidate] ?? 0)")
+                MetaLabel(text: "\(counts[candidate] ?? 0)")
             }
             .padding(.horizontal, DS.Space.base)
             .padding(.vertical, DS.Space.snug)

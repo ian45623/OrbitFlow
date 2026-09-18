@@ -117,18 +117,16 @@ struct TranscriptionDetail: View {
     private var header: some View {
         HStack(spacing: DS.Space.snug) {
             if let run {
-                MetaLabel(text: [
-                    run.engine,
-                    run.date.formatted(.dateTime.month().day().hour().minute()),
-                    run.destinationApp.map { "landed in \($0)" },
-                ].compactMap { $0 }.joined(separator: " · "))
-                .layoutPriority(-1)
+                MetaLabel(text: "\(run.engine) · \(run.date.formatted(.dateTime.month().day().hour().minute()))")
+                    .layoutPriority(-1)
 
                 Spacer(minLength: DS.Space.snug)
 
-                ActionButton(
-                    title: (run.isPinned ?? false) ? "Unpin" : "Pin",
-                    kind: .secondary
+                let isPinned = run.isPinned ?? false
+                IconButton(
+                    systemImage: isPinned ? "pin.fill" : "pin",
+                    label: isPinned ? "Unpin this dictation" : "Pin this dictation",
+                    isOn: isPinned
                 ) {
                     RunLog.modify(run.id) { $0.isPinned = !($0.isPinned ?? false) }
                 }
@@ -140,10 +138,12 @@ struct TranscriptionDetail: View {
                 // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
                 // before a sound is made, and a second press during that window would
                 // cancel a request already billed and send a duplicate.
-                ActionButton(
-                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Read aloud",
-                    kind: .secondary,
-                    isEnabled: speaker.isSpeaking || speaker.isPreparing || !spoken.trimmed.isEmpty
+                let isSpeaking = speaker.isSpeaking || speaker.isPreparing
+                IconButton(
+                    systemImage: isSpeaking ? "stop.fill" : "play.fill",
+                    label: isSpeaking ? "Stop reading" : "Read this aloud",
+                    isOn: isSpeaking,
+                    isEnabled: isSpeaking || !spoken.trimmed.isEmpty
                 ) {
                     if speaker.isSpeaking || speaker.isPreparing {
                         speaker.stop()
@@ -152,7 +152,7 @@ struct TranscriptionDetail: View {
                     }
                 }
 
-                ActionButton(title: "Copy", kind: .primary) {
+                IconButton(systemImage: "doc.on.doc", label: "Copy to the clipboard") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(current?.text ?? source, forType: .string)
                 }

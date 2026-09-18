@@ -254,6 +254,46 @@ struct StatusDot: View {
 
 // MARK: - Controls
 
+/// A square icon action — pin, play, stop. The tooltip carries the words that the icon
+/// replaces, because an icon alone is a guess and this app has non-obvious verbs in it.
+///
+/// Hover fills the surface rather than tinting the glyph: hue never carries state (rule 01),
+/// and a control that only reacts on press gives no sign it can be pressed at all.
+struct IconButton: View {
+    let systemImage: String
+    /// What it does, in words. Shown as the tooltip and read by VoiceOver.
+    let label: String
+    var isOn = false
+    var isEnabled = true
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isOn ? DS.Color.canvas : DS.Color.ink)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .fill(isOn ? DS.Color.ink : (isHovering ? DS.Color.surfaceHover : .clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.control)
+                        .strokeBorder(isOn ? .clear : DS.Color.line, lineWidth: DS.Border.hairline)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .onHover { isHovering = $0 && isEnabled }
+        .animation(DS.Motion.press, value: isHovering)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
 /// The app's button.
 ///
 /// Three weights, and the choice is about consequence rather than decoration: `primary`

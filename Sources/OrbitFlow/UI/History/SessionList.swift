@@ -8,7 +8,7 @@ import SwiftUI
 /// latency and what became of the text. Rows are separated rather than boxed — a transcript
 /// history reads as one document, and a stack of cards would fight the prose inside them.
 struct SessionList: View {
-    let sessions: [HistorySession]
+    let items: [HistoryItem]
     @Binding var selection: UUID?
     @Binding var query: String
     var isSearchFocused: FocusState<Bool>.Binding
@@ -41,7 +41,7 @@ struct SessionList: View {
 
             Hairline()
 
-            if sessions.isEmpty {
+            if items.isEmpty {
                 EmptyPanel(
                     label: isHistoryEmpty ? "Nothing yet" : "No matches",
                     detail: isHistoryEmpty
@@ -51,12 +51,9 @@ struct SessionList: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(sessions) { session in
-                            header(session)
-                            ForEach(session.items) { item in
-                                row(item)
-                                Hairline()
-                            }
+                        ForEach(items) { item in
+                            row(item)
+                            Hairline()
                         }
                     }
                 }
@@ -124,19 +121,6 @@ struct SessionList: View {
         }
     }
 
-    private func header(_ session: HistorySession) -> some View {
-        HStack {
-            MetaLabel(text: "\(session.destination ?? "Unknown") · \(span(session))")
-            Spacer()
-            MetaLabel(text: "\(session.items.count) · \(words(session.words))")
-        }
-        .padding(.horizontal, DS.Space.base)
-        .padding(.vertical, DS.Space.snug)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DS.Color.surface)
-        .overlay(alignment: .bottom) { Hairline() }
-    }
-
     private func row(_ item: HistoryItem) -> some View {
         let run = store.runs.first { $0.id == item.id }
         return Button {
@@ -158,14 +142,18 @@ struct SessionList: View {
                         MetaLabel(text: "Corrected ×\(item.corrections)")
                     }
                 }
+                // No `fixedSize` with a line limit: it sizes the row to the *whole*
+                // transcript's height and then draws only three lines of it, which is where
+                // the empty space under every short row came from.
                 Text(run?.text ?? "")
                     .font(DS.Font.prose)
                     .foregroundStyle(DS.Color.ink)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(DS.Space.base)
+            .padding(.horizontal, DS.Space.base)
+            .padding(.vertical, DS.Space.snug)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selection == item.id ? DS.Color.surfaceHover : .clear)
             // The selected row is marked on its leading edge rather than by colour: hue
@@ -180,20 +168,8 @@ struct SessionList: View {
         .buttonStyle(.plain)
     }
 
-    private func span(_ session: HistorySession) -> String {
-        let start = time(session.started)
-        let end = time(session.ended)
-        return start == end ? start : "\(start)–\(end)"
-    }
-
     private func time(_ date: Date) -> String {
         date.formatted(.dateTime.hour().minute())
     }
 
-    /// "312W", "1.4KW" — a word count is metadata, and metadata is read at a glance.
-    private func words(_ count: Int) -> String {
-        count >= 1000
-            ? String(format: "%.1fKW", Double(count) / 1000)
-            : "\(count)W"
-    }
 }
