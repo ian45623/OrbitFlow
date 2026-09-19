@@ -12,3 +12,5 @@ models/
 *.onnx
 *.nemo
 .claude.md
+# Visual brainstorming companion mockups.
+.superpowers/
