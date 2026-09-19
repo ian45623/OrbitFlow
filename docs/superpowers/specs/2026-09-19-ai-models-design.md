@@ -10,9 +10,10 @@ Read aloud each choose between **Apple · Local · Cloud**, with downloads and s
 in one place. Detailed configuration — API keys, model IDs, voices, speeds, reading modes —
 stays where it is.
 
-Two models become downloadable here: Parakeet already is, and **Kokoro** is added for Read
-aloud. Qwen 1.7B is the recommended local rewrite model but is **out of scope** — see
-"Deliberately not in this project".
+One model becomes newly downloadable: **Kokoro**, for Read aloud. Parakeet already is. The
+recommended fully-local setup is therefore **Parakeet + Apple Intelligence + Kokoro**, all
+three of which are reachable without adding a dependency — see "No third rewrite model" for
+why Qwen 1.7B is not part of it.
 
 ## Layout
 
@@ -54,32 +55,63 @@ a row in a list, and the user asked for the stronger separation. Depth stays at 
 
 | Job | Apple | Local | Cloud |
 |---|---|---|---|
-| Speech to text | `SpeechTranscriber`, streams while you speak | Parakeet, 470 MB | greyed — Orbit Flow has no cloud speech engine |
-| Rewrite | Apple Intelligence (`OnDeviceRewriter`) | none yet — Qwen later | the five `AIProvider` cases |
-| Read aloud | `AVSpeechSynthesizer` system voices | **Kokoro**, ~350 MB | ElevenLabs |
+| Speech to text | `SpeechTranscriber`, streams while you speak | Parakeet, 470 MB | disabled — Orbit Flow has no cloud speech engine |
+| Rewrite | Apple Intelligence (`OnDeviceRewriter`) | disabled — Apple Intelligence already is the local model | the five `AIProvider` cases |
+| Read aloud | `AVSpeechSynthesizer` system voices | **Kokoro** | ElevenLabs |
 
 **A segment with nothing behind it is disabled and says why on hover.** One rule, applied
-twice: Speech to text's Cloud ("Orbit Flow has no cloud speech engine — audio never leaves
-this Mac") and Rewrite's Local ("no local rewrite model yet"). Both rows keep three
-segments, so all three controls are the same width down the page, and the gaps read as
-stances rather than oversights. Nothing on the page is selectable and inert.
+twice:
+
+- Speech to text ▸ Cloud — "Orbit Flow has no cloud speech engine. Audio never leaves this
+  Mac."
+- Rewrite ▸ Local — "Apple Intelligence is the local model. It already runs on this Mac."
+
+Both rows keep three segments, so every control is the same width down the page and the
+rows align. Neither message is a dead end: each says something true the user may not know.
+Nothing on the page is selectable and inert.
 
 ## Grades
 
 Quality and speed are **authored constants**, not measurements — nothing in the app
 benchmarks anything. They live in one file, `ModelGrade.swift`, with the reasoning in
-comments, so revising them is one diff rather than a hunt through views.
+comments, so revising them is one diff rather than a hunt through views. Three grades each,
+1–3: Good, Excellent, Exceptional.
 
-| | Quality | Speed |
+| Job ▸ option | Quality | Speed |
 |---|---|---|
-| Apple (all three jobs) | Good | Instant |
-| Parakeet / Kokoro | Excellent | Fast |
-| Cloud | Exceptional | Network |
+| Speech ▸ Apple | Good | Instant |
+| Speech ▸ Parakeet | Excellent | Fast |
+| Rewrite ▸ Apple Intelligence | **Excellent** | Instant |
+| Rewrite ▸ Cloud | Exceptional | Network |
+| Read aloud ▸ Apple | **derived — see below** | Instant |
+| Read aloud ▸ Kokoro | Excellent | Fast |
+| Read aloud ▸ ElevenLabs | Exceptional | Network |
 
-Three grades each, 1–3. The header's two bars are the mean of the three selected jobs over
-3.0; the word is the rounded mean. Cloud's "Exceptional" is a claim about the tier, not the
-user's configured model — a cheap model would light the same bar. Accepted knowingly: the
-alternative is a model-ID-to-grade table that goes stale every time a provider ships.
+Apple Intelligence grades **Excellent**, not Good. It is a ~3B model Apple built for
+summarization and refinement — the job Orbit Flow actually asks of it — and it is now the
+recommended local rewrite. Grading it Good would push people toward Cloud for no reason
+this app believes in.
+
+**Read aloud ▸ Apple is the one grade that is computed**, because "Apple TTS" is not one
+thing: a default system voice is mediocre and a Premium one is very good.
+`AVSpeechSynthesisVoice.quality` already drives the picker labels in
+`SettingsPanel.voiceLabel`, so the grade reads the selected voice: `.default` → Good,
+`.enhanced` → Excellent, `.premium` → Exceptional. A user with a Premium voice installed
+can therefore see Apple outrank Kokoro, which is true and worth telling them.
+
+To keep the grade function pure and testable it takes a `VoiceGrade` enum, and the view maps
+AVFoundation's type onto it — `OrbitFlowModels` does not import AVFoundation.
+
+The header's two bars are the mean of the three selected jobs over 3.0; the word is the
+rounded mean. Cloud's "Exceptional" is a claim about the tier, not the user's configured
+model — a cheap model would light the same bar. Accepted knowingly: the alternative is a
+model-ID-to-grade table that goes stale every time a provider ships.
+
+**Download sizes are measured, not guessed.** Parakeet's 470 MB is confirmed in
+`ParakeetModels`. Kokoro's figure is obtained by downloading it once during implementation
+and reading the installed size, then written into `ModelGrade` with a comment naming the
+model repo it was measured from. No size is asserted in this spec that has not been
+measured.
 
 ## `ManagedModel`
 
@@ -91,7 +123,7 @@ so Kokoro is a sibling rather than a copy:
 @MainActor protocol ManagedModel: AnyObject, Observable {
     var id: String { get }
     var displayName: String { get }
-    var downloadSize: String { get }      // "470 MB", authored — not known before fetching
+    var downloadSize: String { get }      // "470 MB", measured once and written in
     var phase: ModelPhase { get }         // missing / working(label, fraction) / ready / failed
     var installedSize: Int64? { get }
     func start()
@@ -100,8 +132,9 @@ so Kokoro is a sibling rather than a copy:
 ```
 
 `ParakeetDownload` conforms with no behaviour change. `KokoroDownload` conforms alongside.
-One SwiftUI view, `ModelStateCard`, renders any conformer, so Qwen later is a conformance
-and a table entry, not a screen.
+One SwiftUI view, `ModelStateCard`, renders any conformer. A future local model is then a
+conformance and a `ModelGrade` row rather than a screen — which is the point of the protocol
+even though only two models exist today.
 
 `ModelPhase` is `ParakeetDownload.Phase` lifted out verbatim, including `.working(label:
 fraction:)` — the named phases exist because the compile step after a download is slow and
@@ -167,8 +200,8 @@ a key who wanted Apple Intelligence can finally say so — and means the migrati
 reproduce the old implicit rule, or existing users silently change engines.
 
 `OnDemandRewrite.engine` gains a `source: ModelSource` parameter. `.local` is unreachable
-while that segment is disabled, and returns `.onDevice` until Qwen lands — a stored value
-from a future build must never leave the function without an engine. It keeps its
+while that segment is disabled, and maps to `.onDevice` — for rewriting, Apple Intelligence
+*is* the local model, so that is the honest mapping rather than a placeholder. It keeps its
 fallbacks:
 Cloud without a working key still falls back rather than failing, because that path is
 reached from the Services menu where a silent no-op reads as a broken feature. It is pure,
@@ -205,20 +238,37 @@ by a test target, which is why `OrbitFlowAIRewrite` and friends exist.
 - `ModelGrade` aggregation: the mean and its word for every combination of three sources,
   and that `Runs on` is "Mac + cloud" iff any source is `.cloud`. A new `OrbitFlowModels`
   target, following `OrbitFlowStats`.
+- `ModelGrade` for Read aloud ▸ Apple across all three `VoiceGrade` values, including that a
+  Premium voice grades above Kokoro.
 - Migration: stored defaults from the previous build map as the table above.
 
 Kokoro synthesis and the downloads are not unit-tested — they are network and CoreML. They
 are verified by running the app.
 
-## Deliberately not in this project
+## No third rewrite model
 
-**Qwen 1.7B.** The recommended local rewrite model, and the only thing on the page with no
-code behind it. Parakeet and Kokoro both come from a dependency already pinned; Qwen needs a
-new MLX-scale dependency, a weights downloader, and a third rewrite backend beside
-`CloudRewriter` and `OnDeviceRewriter`. Holding the page for it would delay two working
-models behind the hardest part of a third. Because "Local" names a slot rather than a model,
-Qwen arrives later as a `ManagedModel` conformance and a `ModelGrade` row, with no change to
-this page. Its own spec.
+An earlier draft of this page offered **Qwen3-1.7B** as a downloadable local rewrite model,
+recommended over Apple Intelligence. That was wrong twice over, and the reasoning is
+recorded here so it is not rediscovered.
+
+**It is a different kind of thing.** Parakeet and Kokoro are fixed CoreML graphs — one call
+in, audio or text out — and FluidAudio already downloads and runs them. An LLM needs its own
+runtime (MLX on Metal, not the ANE), a tokenizer, a token-by-token sampling loop with a KV
+cache, and a streaming and timeout story. It shares nothing with the other two but the word
+"download". The dependency would be `ml-explore/mlx-swift-lm`, which is real and properly
+versioned, but it is a new runtime in an app whose only ML dependency today is FluidAudio.
+
+**And it would not be better.** Apple's on-device model is ~3B and built for summarization
+and refinement, which is precisely this job; Qwen3-1.7B leads it on reasoning benchmarks,
+and turning a rambling voice note into a clean sentence is not reasoning. Paying ~1 GB and a
+new runtime to get a smaller model that is worse at the task is the wrong trade.
+
+The one real gap Qwen would fill is the Macs `OnDeviceRewriter.unavailableReason` already
+names — not eligible, Apple Intelligence switched off, model still downloading. Those users
+have no local rewrite. That is a genuine problem and a much narrower one than "add a local
+model", and it should be solved on its own terms if it is solved at all.
+
+## Deliberately not in this project
 
 **Cloud speech to text.** Whisper or Deepgram would fill the greyed segment, but it is the
 first time audio would leave the Mac, which cuts against the app's central promise. A
