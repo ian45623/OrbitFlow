@@ -49,6 +49,14 @@ let package = Package(
             path: "Sources/OrbitFlowHistory",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // Grades and the readout are real logic — a mean, a rounding, and a rule about
+        // when anything leaves the Mac — and an executable target cannot be imported by
+        // a test target. Same reason OrbitFlowStats exists.
+        .target(
+            name: "OrbitFlowModels",
+            path: "Sources/OrbitFlowModels",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
@@ -57,6 +65,7 @@ let package = Package(
                 "OrbitFlowHotkey",
                 "OrbitFlowStats",
                 "OrbitFlowHistory",
+                "OrbitFlowModels",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -93,6 +102,12 @@ let package = Package(
             name: "OrbitFlowStatsTests",
             dependencies: ["OrbitFlowStats"],
             path: "Tests/OrbitFlowStatsTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowModelsTests",
+            dependencies: ["OrbitFlowModels"],
+            path: "Tests/OrbitFlowModelsTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
