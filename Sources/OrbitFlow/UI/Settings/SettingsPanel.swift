@@ -268,18 +268,7 @@ struct SettingsPanel: View {
                     : "Parakeet on the Neural Engine. Resolves when you let go, and is more accurate on English.")
             }
 
-            Hairline()
-
-            SettingsRow(label: "Compare engines", help: "Run both and show them side by side.") {
-                Toggle("", isOn: $settings.compareMode)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-            } detail: {
-                note("Nothing is typed while comparing — the results open in the comparison "
-                    + "window instead.")
-            }
-
-            if settings.engine == .parakeet || settings.compareMode {
+            if settings.engine == .parakeet {
                 Hairline()
                 VStack(alignment: .leading, spacing: DS.Space.base) {
                     MetaLabel(text: "Parakeet model")

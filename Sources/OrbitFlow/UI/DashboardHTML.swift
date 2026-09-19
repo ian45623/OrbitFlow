@@ -2,7 +2,7 @@ import Foundation
 
 /// Renders the live comparison page. Self-contained, theme-aware, auto-refreshing.
 enum DashboardHTML {
-    static func render(runs: [DictationRun], compareMode: Bool = false, key: String = "Right \u{2325}") -> String {
+    static func render(runs: [DictationRun], key: String = "Right \u{2325}") -> String {
         let byEngine = Dictionary(grouping: runs, by: \.engine)
         let summary = byEngine
             .map { engine, runs in EngineSummary(engine: engine, runs: runs) }
@@ -14,7 +14,7 @@ enum DashboardHTML {
         let ungrouped = runs.filter { $0.group == nil }
 
         let body = runs.isEmpty
-            ? emptyState(compareMode: compareMode, key: key)
+            ? emptyState(key: key)
             : """
               \(groups.isEmpty ? "" : "<h2 class=\"sec\">Head to head</h2>")
               \(groups.map { comparisonBlock(runs: $0.value) }.joined())
@@ -111,13 +111,10 @@ enum DashboardHTML {
         """
     }
 
-    private static func emptyState(compareMode: Bool, key: String) -> String {
+    private static func emptyState(key: String) -> String {
         """
         <div class="panel empty">
           <p class="lead">Hold <kbd>\(escape(key))</kbd>, say a sentence, let go.</p>
-          <p>\(compareMode
-              ? "Both engines will run on that one recording and appear here side by side."
-              : "Compare mode is off — turn it on in the menu bar to see both engines at once.")</p>
           <p class="hint">Nothing to click here. This page fills in on its own.</p>
         </div>
         """

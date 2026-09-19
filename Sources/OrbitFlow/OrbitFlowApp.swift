@@ -56,12 +56,6 @@ struct OrbitFlowApp: App {
         // question about permissions, asked at launch — never a question about what
         // happened to be on screen when the app last quit.
         .restorationBehavior(.disabled)
-
-        Window("Engine comparison", id: "comparison") {
-            ComparisonWindow(controller: delegate.controller)
-        }
-        .defaultSize(width: 640, height: 560)
-        .windowResizability(.contentMinSize)
     }
 
     /// The main window, plus the one thing that has to happen once at launch from inside a
@@ -146,19 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // dictation touches them first — so the first hold after every launch would stall
         // with the HUD showing nothing. Warm them in the background instead, but only when
         // they're actually going to be used and are already downloaded.
-        let willUseParakeet = Settings.shared.compareMode || Settings.shared.engine == .parakeet
+        let willUseParakeet = Settings.shared.engine == .parakeet
         if willUseParakeet, ParakeetModels.isDownloaded {
             Task.detached(priority: .utility) {
                 _ = try? await ParakeetModels.shared.manager()
-            }
-        }
-
-        // Every `make install` relaunches the app and drops its windows. Restoring the
-        // window when it was open last time keeps it from vanishing on each rebuild.
-        if UserDefaults.standard.bool(forKey: "comparisonWindowOpen") {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(400))
-                Self.showComparisonWindow()
             }
         }
 
@@ -178,16 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.info("Orbit Flow ready — hold \(ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)) to dictate")
     }
 
-    /// `orbitflowyt://clear` and `orbitflowyt://show`, used by the legacy HTML dashboard and
-    /// as a scriptable way to raise the window.
+    /// `orbitflowyt://clear`, the "Clear results" link on the legacy HTML dashboard.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "orbitflowyt" {
             switch url.host {
             case "clear":
                 RunLog.clear()
                 RunStore.shared.reload()
-            case "show":
-                Self.showComparisonWindow()
             default:
                 break
             }
@@ -219,11 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return !Permissions.hasAccessibility || !Permissions.hasMicrophone
     }
 
-    static func showComparisonWindow() {
-        RunStore.shared.reload()
-        showWindow(titled: "Engine comparison")
-    }
-
     /// Closing the window leaves the app running with the key still armed.
     ///
     /// This is the whole point of a push-to-talk app: dictation happens in *other* apps, so
@@ -241,8 +218,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        let isOpen = NSApp.windows.contains { $0.title == "Engine comparison" && $0.isVisible }
-        UserDefaults.standard.set(isOpen, forKey: "comparisonWindowOpen")
         controller.deactivate()
     }
 
@@ -314,13 +289,9 @@ private struct MenuContent: View {
             }
         }
 
-        Toggle("Compare mode (both engines)", isOn: $settings.compareMode)
-
-        if !settings.compareMode {
-            Picker("Engine", selection: $settings.engine) {
-                ForEach(SpeechEngineChoice.allCases, id: \.self) { choice in
-                    Text(choice.displayName).tag(choice)
-                }
+        Picker("Engine", selection: $settings.engine) {
+            ForEach(SpeechEngineChoice.allCases, id: \.self) { choice in
+                Text(choice.displayName).tag(choice)
             }
         }
 
@@ -342,17 +313,10 @@ private struct MenuContent: View {
             }
         }
 
-        Button("Show comparison window") {
-            RunStore.shared.reload()
-            openWindow(id: "comparison")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .keyboardShortcut("d")
-
         // Downloading ~470 MB on the first hold would look like a hang, so offer to do it
         // deliberately instead. Silent once it's installed — a permanent "✓ installed" row
         // is a menu item that can never do anything.
-        if settings.engine == .parakeet || settings.compareMode {
+        if settings.engine == .parakeet {
             switch parakeet.phase {
             case .ready:
                 EmptyView()

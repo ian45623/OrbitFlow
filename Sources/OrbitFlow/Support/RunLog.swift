@@ -2,6 +2,7 @@ import OrbitFlowDictionary
 import OrbitFlowHistory
 import OrbitFlowHotkey
 import Foundation
+import Observation
 
 /// One rewrite of a transcription, kept so the detail page can stack them.
 ///
@@ -224,7 +225,6 @@ enum RunLog {
         let runs = load()
         try? DashboardHTML.render(
             runs: runs,
-            compareMode: Settings.shared.compareMode,
             key: ShortcutKeys.displaySummary(Settings.shared.shortcutKeys)
         ).write(to: dashboardURL, atomically: true, encoding: .utf8)
     }
@@ -279,5 +279,28 @@ enum RunLog {
 
         regenerate()
         RunStore.shared.reload()
+    }
+}
+
+/// Live-updating view of the run log, for the UI to observe.
+///
+/// `RunLog` is a plain file-backed API with no notion of "now" — Recent, the dictionary
+/// panel, Settings' weekly stats, onboarding, and the detail page would each otherwise have
+/// to reload it by hand after every dictation. Observing `.shared` does that once, centrally;
+/// `reload()` is what every `RunLog` write calls when it's done.
+///
+/// Formerly defined alongside the comparison window it was built for — moved here when that
+/// window was removed, since every other reader of it lived on regardless.
+@MainActor
+@Observable
+final class RunStore {
+    static let shared = RunStore()
+
+    private(set) var runs: [DictationRun] = []
+
+    private init() { reload() }
+
+    func reload() {
+        runs = RunLog.load()
     }
 }

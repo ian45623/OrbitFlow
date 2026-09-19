@@ -130,12 +130,6 @@ final class Settings {
         didSet { defaults.set(engine.rawValue, forKey: Keys.engine) }
     }
 
-    /// Run every engine on each recording and show them side by side, instead of
-    /// transcribing with one. Nothing is typed into the focused app in this mode.
-    var compareMode: Bool {
-        didSet { defaults.set(compareMode, forKey: Keys.compareMode) }
-    }
-
     /// Install a newer build as soon as the periodic check finds one and nothing is in
     /// flight. Off by default: quitting and relaunching is something to opt into.
     var autoUpdate: Bool {
@@ -334,7 +328,6 @@ final class Settings {
         static let aiProvider = "aiProvider"
         static let aiModel = "aiModel"
         static let rewriteMode = "rewriteMode"
-        static let compareMode = "compareMode"
         static let autoUpdate = "autoUpdate"
         static let onboardingCompleted = "onboardingCompleted"
         static let hudSize = "hudSize"
@@ -400,7 +393,6 @@ final class Settings {
         rewriteMode = RewriteMode(
             rawValue: defaults.string(forKey: Keys.rewriteMode) ?? ""
         ) ?? .faithful
-        compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         autoUpdate = defaults.object(forKey: Keys.autoUpdate) as? Bool ?? false
         onboardingCompleted = defaults.bool(forKey: Keys.onboardingCompleted)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
