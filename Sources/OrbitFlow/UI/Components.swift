@@ -49,36 +49,56 @@ struct Hairline: View {
 ///
 /// Reports drags in points. Whoever owns the layout decides what a point means.
 struct PaneDivider: View {
-    /// Called continuously while dragging, with the total offset from where the drag
-    /// began — not a per-frame delta, so a caller can clamp without accumulating error.
+    /// Called while dragging, with the total offset from where the drag began — not a
+    /// per-frame delta, so a caller can clamp without accumulating error.
     let onDrag: (CGFloat) -> Void
-    /// Called when the drag ends, to persist whatever the last offset produced.
+    /// Called when the drag ends, to release whatever the caller held during it.
     var onCommit: () -> Void = {}
     /// Double-click. The way back when the divider ends up somewhere useless.
     var onReset: () -> Void = {}
 
+    /// Whether this view owns a cursor on the stack. `onHover` is not guaranteed to
+    /// alternate — a window deactivating mid-hover can deliver two exits — and an
+    /// unbalanced `push`/`pop` pair leaves a resize cursor stuck over the whole app.
+    @State private var isPushed = false
+
     var body: some View {
         Hairline(vertical: true)
-            // The grab area is padding rather than a wider line: the hairline stays one
-            // point wide and the gesture gets `dividerGrab` to either side of it.
-            .padding(.horizontal, DS.Layout.dividerGrab)
-            .contentShape(.rect)
-            .onHover { inside in
-                // Push and pop rather than `set`: the cursor has to survive the pointer
-                // crossing the panes on either side, and only a push/pop pair restores
-                // whatever the text views underneath had asked for.
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            // The grab area is an overlay, not padding. An overlay draws and hit-tests
+            // outside its parent's bounds without taking part in layout, so the divider
+            // occupies exactly the one point it draws while answering to `dividerGrab`
+            // on either side. Padding it wider and subtracting the difference back out
+            // leaves the hit region clipped to the one-point frame.
+            .overlay {
+                Color.clear
+                    .frame(width: DS.Layout.dividerGrab * 2)
+                    .contentShape(.rect)
+                    .onHover { inside in
+                        if inside, !isPushed {
+                            NSCursor.resizeLeftRight.push()
+                            isPushed = true
+                        } else if !inside, isPushed {
+                            NSCursor.pop()
+                            isPushed = false
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                // A click is a zero-distance drag. Reporting it would
+                                // rewrite a clamped fraction to its clamped value, moving
+                                // the divider on a stray click that should do nothing.
+                                guard drag.translation.width != 0 else { return }
+                                onDrag(drag.translation.width)
+                            }
+                            .onEnded { _ in onCommit() }
+                    )
+                    // Simultaneous, because the drag above claims the mouse-down that a
+                    // double-click also needs. An exclusive tap gesture never fires.
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { onReset() })
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { onDrag($0.translation.width) }
-                    .onEnded { _ in onCommit() }
-            )
-            .onTapGesture(count: 2) { onReset() }
             .accessibilityLabel("Resize the list")
-            // Negative margin so the grab area overlaps the panes instead of pushing them
-            // apart: without this the divider would occupy 17 points of layout to draw one.
-            .padding(.horizontal, -DS.Layout.dividerGrab)
+            .accessibilityHint("Drag to resize, double-click to reset")
     }
 }
 
