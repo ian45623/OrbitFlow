@@ -126,7 +126,7 @@ struct SessionList: View {
         return Button {
             selection = item.id
         } label: {
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
+            VStack(alignment: .leading, spacing: DS.Space.tight) {
                 HStack(spacing: DS.Space.snug) {
                     MetaLabel(text: time(item.date))
                     MetaLabel(text: String(format: "%.2fs", run?.processSeconds ?? 0))
@@ -147,13 +147,17 @@ struct SessionList: View {
                 // the empty space under every short row came from.
                 Text(run?.text ?? "")
                     .font(DS.Font.prose)
+                    .lineSpacing(DS.Font.proseLeading)
                     .foregroundStyle(DS.Color.ink)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, DS.Space.base)
-            .padding(.vertical, DS.Space.snug)
+            // Roomy rather than snug: rows are separated by a hairline and nothing else,
+            // so the space around them is the only thing telling one dictation from the
+            // next. At `snug` the list read as a wall of text.
+            .padding(.vertical, DS.Space.roomy)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selection == item.id ? DS.Color.surfaceHover : .clear)
             // The selected row is marked on its leading edge rather than by colour: hue

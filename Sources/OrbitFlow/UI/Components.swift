@@ -40,6 +40,68 @@ struct Hairline: View {
     }
 }
 
+/// A `Hairline(vertical:)` you can drag.
+///
+/// Looks identical at rest — the same one-point line in the same colour — because a
+/// splitter that advertises itself with a grip or a thicker rule adds a piece of chrome
+/// to every screen to serve an adjustment made once. What it adds instead is a grab area
+/// wider than the line and a resize cursor, so it answers when the pointer arrives.
+///
+/// Reports drags in points. Whoever owns the layout decides what a point means.
+struct PaneDivider: View {
+    /// Called while dragging, with the total offset from where the drag began — not a
+    /// per-frame delta, so a caller can clamp without accumulating error.
+    let onDrag: (CGFloat) -> Void
+    /// Called when the drag ends, to release whatever the caller held during it.
+    var onCommit: () -> Void = {}
+    /// Double-click. The way back when the divider ends up somewhere useless.
+    var onReset: () -> Void = {}
+
+    /// Whether this view owns a cursor on the stack. `onHover` is not guaranteed to
+    /// alternate — a window deactivating mid-hover can deliver two exits — and an
+    /// unbalanced `push`/`pop` pair leaves a resize cursor stuck over the whole app.
+    @State private var isPushed = false
+
+    var body: some View {
+        Hairline(vertical: true)
+            // The grab area is an overlay, not padding. An overlay draws and hit-tests
+            // outside its parent's bounds without taking part in layout, so the divider
+            // occupies exactly the one point it draws while answering to `dividerGrab`
+            // on either side. Padding it wider and subtracting the difference back out
+            // leaves the hit region clipped to the one-point frame.
+            .overlay {
+                Color.clear
+                    .frame(width: DS.Layout.dividerGrab * 2)
+                    .contentShape(.rect)
+                    .onHover { inside in
+                        if inside, !isPushed {
+                            NSCursor.resizeLeftRight.push()
+                            isPushed = true
+                        } else if !inside, isPushed {
+                            NSCursor.pop()
+                            isPushed = false
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                // A click is a zero-distance drag. Reporting it would
+                                // rewrite a clamped fraction to its clamped value, moving
+                                // the divider on a stray click that should do nothing.
+                                guard drag.translation.width != 0 else { return }
+                                onDrag(drag.translation.width)
+                            }
+                            .onEnded { _ in onCommit() }
+                    )
+                    // Simultaneous, because the drag above claims the mouse-down that a
+                    // double-click also needs. An exclusive tap gesture never fires.
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { onReset() })
+            }
+            .accessibilityLabel("Resize the list")
+            .accessibilityHint("Drag to resize, double-click to reset")
+    }
+}
+
 // MARK: - Labels
 
 /// A quiet interface label — section headings, field names, row metadata.
