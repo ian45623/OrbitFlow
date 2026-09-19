@@ -62,15 +62,6 @@ make install   # bundle, sign, copy to /Applications, launch
 
 ## Things that look like bugs and are not
 
-**Compare mode doesn't type anything.** By design — `Settings.compareMode` runs every engine
-on one recording and shows them side by side. If both injected, two transcripts would fight
-over one text field. This is the single most confusing behaviour in the app.
-
-**The timing column isn't comparing like with like.** Apple and Parakeet are timed on local
-compute with the clock started *after* model load. Wispr Flow's number is its own
-`e2eLatency`, which includes a network round trip and its cleanup pass. Don't present them
-as one ranking.
-
 **The hotkey has two gestures, and the tap is not a bug.** A release within
 `DictationController.tapLatchThreshold` (0.4s) *latches* recording on rather than ending it,
 so tap-talk-tap works; a longer hold is push-to-talk as before and ends on release. Both live
