@@ -208,6 +208,14 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         guard KokoroModels.isSupportedOS else {
             return fail(KokoroModels.unsupportedOSReason)
         }
+        // `manager()` reaches `ensureModels`, which fetches 108 MB with only a spinner —
+        // no bytes, no percentage, no timeout — if the models aren't already on disk.
+        // Starting that here, from a play press, would download without being asked;
+        // the only place that shows real progress and asked first is the AI Models card.
+        // Refuse instead, exactly like the OS gate just above.
+        guard KokoroModels.isDownloaded else {
+            return fail("Kokoro isn't downloaded yet — go to Settings ▸ AI Models to get it.")
+        }
 
         isPreparing = true
         let voice = Settings.shared.readAloudLocalVoice
