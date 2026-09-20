@@ -103,6 +103,13 @@ final class DictationController {
     /// user is owed an answer.
     private(set) var readAloudError: String?
 
+    /// A passage that finished playing and is still on the pill, so ▶ can replay it.
+    ///
+    /// Without this the pill vanished on the last word, and hearing a paragraph twice —
+    /// or hearing the summary of something you just heard in full — meant going back to
+    /// the document and highlighting it again.
+    private(set) var readAloudFinished = false
+
     /// Whether the pill is in read-aloud mode: something offered, something transforming,
     /// something being read, or a failure the user hasn't dismissed yet — from the pill,
     /// the History page, or the Settings preview.
@@ -121,6 +128,7 @@ final class DictationController {
         readAloudOffer != nil
             || readAloudStatus != nil
             || readAloudError != nil
+            || readAloudFinished
             || Speaker.shared.isSpeaking
             || Speaker.shared.isPreparing
             || Speaker.shared.failure != nil
@@ -309,6 +317,7 @@ final class DictationController {
         hotkey.onRelease = { [weak self] in self?.hotkeyReleased() }
         hotkey.onChord = { [weak self] in self?.hotkeyChorded() }
         hotkey.onMouseUp = { [weak self] isGesture in self?.mouseReleased(isGesture: isGesture) }
+        Speaker.shared.onFinished = { [weak self] in self?.passageFinished() }
         // Escape does what the pill's ✕ does, but the swallow decision needs the answer up
         // front: Escape must reach the app underneath unless it cancelled a recording or
         // silenced speech. An offer on its own is cleared and the key still goes through —
@@ -340,7 +349,9 @@ final class DictationController {
                 self.stopReadingAloud()
                 return true
             }
-            if self.readAloudOffer != nil { self.stopReadingAloud() }
+            // A finished passage is a leftover like an offer, not something in flight, so
+            // Escape clears it and still reaches the app underneath.
+            if self.readAloudOffer != nil || self.readAloudFinished { self.stopReadingAloud() }
             return false
         }
         isHotkeyArmed = hotkey.start()
@@ -442,6 +453,7 @@ final class DictationController {
         // A notice is feedback for something the user just did; an offer is a guess about
         // what they might want. The notice wins.
         readAloudOffer = nil
+        clearFinishedPassage()
         // The user has moved on to whatever produced this notice — abandon any transform
         // still running so it can't arrive later and speak over something else.
         transformToken = UUID()
@@ -463,6 +475,7 @@ final class DictationController {
         if running {
             notice = nil
             readAloudOffer = nil
+            clearFinishedPassage()
             // The user has moved on to an on-demand rewrite — abandon any read-aloud
             // transform still running so it can't arrive later and speak over it.
             transformToken = UUID()
@@ -487,6 +500,16 @@ final class DictationController {
             // voice call, not two.
             if Speaker.shared.failure != nil, let source = readAloudSource {
                 Speaker.shared.clearFailure()
+                begin(source)
+                return
+            }
+            // A passage still on the pill after its last word. `begin` finds the text
+            // already filed, so the replay reuses the same History entry, and the transform
+            // — and, for ElevenLabs or Kokoro, the rendered audio — come out of the caches
+            // rather than costing a second call.
+            if readAloudFinished, let source = readAloudSource {
+                readAloudFinished = false
+                offerToken = UUID()
                 begin(source)
             }
             return
@@ -719,6 +742,7 @@ final class DictationController {
         readAloudOffer = nil
         readAloudStatus = nil
         readAloudError = nil
+        readAloudFinished = false
         readAloudSource = nil
         transformCache = [:]
         lengthConfirmed = false
@@ -809,6 +833,19 @@ final class DictationController {
             switch decision {
             case .none:
                 if reading == .empty || reading == .unknown { lastOfferedSelection = nil }
+                // Two ways to learn the selection is gone, because most apps won't say.
+                //
+                // `.empty` is an app stating it outright, and is believed on any click.
+                //
+                // `.unknown` is an app that never answers at all — Chrome, Cursor, Word —
+                // where the offer itself was only ever a guess from the shape of the
+                // gesture. The same signal has to end it: a plain click cannot have
+                // selected anything, and collapsing a selection to a caret is the
+                // commonest thing it does. Without this the pill in those apps has no way
+                // to learn it has been orphaned and just waits out its timer.
+                if reading == .empty || (reading == .unknown && !isGesture) {
+                    selectionCleared()
+                }
             case .offerText(let text):
                 lastOfferedSelection = text
                 offerReadAloud(.text(text))
@@ -819,7 +856,13 @@ final class DictationController {
         }
     }
 
-    /// Shows ▶ for `offer`, fading after five seconds if it isn't pressed.
+    /// How long the pill waits before fading on its own — both for an offer nobody pressed
+    /// and for a passage that has finished playing. Long enough to notice the pill, read
+    /// the mode name and decide; short enough that a stray double-click doesn't leave one
+    /// parked on screen. Hovering the pill pauses the clock either way.
+    private static let fadeSeconds = 12
+
+    /// Shows ▶ for `offer`, fading after `fadeSeconds` if it isn't pressed.
     private func offerReadAloud(_ offer: ReadAloudOffer) {
         readAloudOffer = offer
         // A new selection invalidates everything derived from the old one — including a
@@ -840,29 +883,90 @@ final class DictationController {
         // before shouldn't pin it open, and SwiftUI won't report the exit of a view it
         // already replaced.
         isHoveringReadAloud = false
-        scheduleOfferFade()
+        readAloudFinished = false
+        scheduleFade()
     }
 
-    private func scheduleOfferFade() {
+    /// Arms the one timer both leftovers share: an unpressed offer and a passage that has
+    /// finished. They can't be on screen together — a passage finishing behind a newer
+    /// offer leaves the offer alone — so one token serves both.
+    private func scheduleFade() {
         offerToken = UUID()
         let token = offerToken
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(5))
-            if offerToken == token, !isHoveringReadAloud { readAloudOffer = nil }
+            try? await Task.sleep(for: .seconds(Self.fadeSeconds))
+            guard offerToken == token, !isHoveringReadAloud else { return }
+            readAloudOffer = nil
+            clearFinishedPassage()
         }
     }
 
-    /// The pointer entered or left the read-aloud button. Leaving gives an offer a fresh
-    /// five seconds rather than whatever was left of the first, which may already be gone.
+    /// The pointer entered or left the read-aloud button. Leaving gives whatever is on the
+    /// pill a fresh `fadeSeconds` rather than whatever was left of the first, which may
+    /// already be gone.
     func setHoveringReadAloud(_ hovering: Bool) {
         isHoveringReadAloud = hovering
         // Anything the user is owed an answer to — the long-selection question, a failure
         // with ▶ still there to retry — stays up until it is answered. Both set
         // `readAloudError`, both skipped their own fade when they put the offer back, and
         // re-arming one here on mouse-out would dismiss them behind the user's back.
-        if !hovering, readAloudOffer != nil, !isCopyingSelection, readAloudError == nil {
-            scheduleOfferFade()
-        }
+        guard !hovering, !isCopyingSelection, readAloudError == nil else { return }
+        if readAloudOffer != nil || readAloudFinished { scheduleFade() }
+    }
+
+    /// The selection the pill belongs to is gone, so the pill goes with it rather than
+    /// sitting out the rest of its `fadeSeconds`.
+    ///
+    /// The timer is the *longest* a leftover stays, not a term it serves: deselecting is
+    /// the clearest statement there is that the user has moved on, and a ▶ offering to read
+    /// a passage that is no longer highlighted has nothing behind it.
+    ///
+    /// Only leftovers go. Anything in flight keeps the pill no matter what the selection
+    /// does — a passage playing, a voice rendering, a transform running, an error waiting
+    /// to be read — because that pill carries the only ■ that can stop it, and clicking
+    /// somewhere to deselect is not a request to be stuck with a voice you can't reach.
+    ///
+    /// The guards also cover the pill's own buttons. The HUD never takes focus, so a press
+    /// of ▶ reads the *other* app's selection and looks exactly like a plain click: it
+    /// arrives here 50ms later, by which time ▶ has already set a copy, a transform or
+    /// speech going, and every one of those is a state this refuses to dismiss.
+    private func selectionCleared() {
+        guard readAloudOffer != nil || readAloudFinished else { return }
+        guard !Speaker.shared.isSpeaking,
+              !Speaker.shared.isPreparing,
+              !isCopyingSelection,
+              readAloudStatus == nil,
+              readAloudError == nil,
+              Speaker.shared.failure == nil
+        else { return }
+        // Retires the pending fade, so it can't fire later against a newer pill.
+        offerToken = UUID()
+        readAloudOffer = nil
+        clearFinishedPassage()
+    }
+
+    /// A passage reached its end. The pill stays up for `fadeSeconds` so ▶ can play it
+    /// again — the transform and, for a networked voice, the audio are both still cached,
+    /// so a replay costs nothing but the press.
+    ///
+    /// A newer offer outranks this: a highlight made while the old passage was still
+    /// playing is what ▶ is for now, and re-arming the fade here would cut its time short.
+    private func passageFinished() {
+        guard readAloudOffer == nil, readAloudSource != nil else { return }
+        readAloudFinished = true
+        scheduleFade()
+    }
+
+    /// Drops the finished passage and everything derived from it. Split out because the
+    /// flag and the text it would replay have to go together — a ▶ that finds one without
+    /// the other is a disc that does nothing.
+    private func clearFinishedPassage() {
+        guard readAloudFinished else { return }
+        readAloudFinished = false
+        readAloudSource = nil
+        transformCache = [:]
+        lengthConfirmed = false
+        readAloudRunID = nil
     }
 
     // MARK: - Dictation
@@ -873,6 +977,7 @@ final class DictationController {
         // Speech is left alone until just before capture — see there.
         offerToken = UUID()
         readAloudOffer = nil
+        clearFinishedPassage()
         // The talk key means the user is dictating now — a transform that resumes after
         // this must not call `Speaker.shared.speak` into the microphone that's about to
         // open.

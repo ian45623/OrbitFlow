@@ -232,6 +232,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = controller.readAloudOffer
             _ = controller.readAloudStatus
             _ = controller.readAloudError
+            // Every term of `isReadAloudShowing` has to be named here — this list is the
+            // dependency, not the property that reads them. Without this one the pill
+            // would still appear when a passage finished (`isSpeaking` going false is what
+            // wakes this up) but nothing would fire when the linger expires, leaving it on
+            // screen until some unrelated change happened to dismiss it.
+            _ = controller.readAloudFinished
             _ = Speaker.shared.isSpeaking
             _ = Speaker.shared.isPreparing
             _ = Speaker.shared.failure
