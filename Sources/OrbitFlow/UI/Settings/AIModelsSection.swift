@@ -32,7 +32,13 @@ struct AIModelsSection: View {
             speech: settings.engine == .parakeet ? .local : .apple,
             rewrite: settings.rewriteSource,
             readAloud: source(of: settings.readAloudEngine),
-            voice: voiceGrade(for: settings.readAloudVoice)
+            voice: voiceGrade(for: settings.readAloudVoice),
+            // An override is always a cloud `AIProvider` (there is no on-device case to
+            // override to) — see `OnDemandRewrite.source`. Without `readingMode.usesAI`
+            // the override is never called, so both have to be true for this path to
+            // actually leave the Mac.
+            readAloudAIOverrideIsCloud:
+                settings.readingMode.usesAI && settings.readAloudProviderOverride != nil
         )
     }
 

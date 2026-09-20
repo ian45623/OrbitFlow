@@ -120,11 +120,21 @@ public struct ModelGrade: Sendable {
         public let leavesMac: Bool
     }
 
+    /// - Parameter readAloudAIOverrideIsCloud: True when an AI reading mode (Summary,
+    ///   Gist, …) is on *and* a per-feature `readAloudProviderOverride` is configured for
+    ///   it. An override always targets a cloud `AIProvider` — there is no on-device case
+    ///   to override to — independently of `rewrite`'s tier, so a user can set Rewrite to
+    ///   Apple and still have every read-aloud summary uploaded. That call isn't one of
+    ///   `pairs` below (this target can't import `AIProvider` to model it as a
+    ///   `ModelJob`/`ModelSource` pair without creating a dependency cycle with
+    ///   OrbitFlowAIRewrite), so the caller resolves it and hands over just the bit that
+    ///   matters: does this path leave the Mac or not.
     public static func readout(
         speech: ModelSource,
         rewrite: ModelSource,
         readAloud: ModelSource,
-        voice: VoiceGrade
+        voice: VoiceGrade,
+        readAloudAIOverrideIsCloud: Bool
     ) -> Readout {
         let pairs: [(ModelJob, ModelSource)] = [
             (.speech, speech), (.rewrite, rewrite), (.readAloud, readAloud),
@@ -148,7 +158,10 @@ public struct ModelGrade: Sendable {
             speed: Speed(rawValue: Int((Double(speedTotal) / count).rounded())) ?? .instant,
             qualityFraction: Double(qualityTotal) / (count * 3),
             speedFraction: Double(speedTotal) / (count * 3),
-            leavesMac: pairs.contains { $0.1 == .cloud }
+            // Any path that can leave the Mac must count here — "Runs on" must never
+            // under-claim locality, even for a call the three job/source pairs above
+            // don't cover.
+            leavesMac: pairs.contains { $0.1 == .cloud } || readAloudAIOverrideIsCloud
         )
     }
 }

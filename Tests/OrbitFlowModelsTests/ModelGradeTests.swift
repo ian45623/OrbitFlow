@@ -72,7 +72,10 @@ struct ModelGradeTests {
 
     @Test("All Apple, standard voice: good and instant")
     func readoutAllApple() {
-        let r = ModelGrade.readout(speech: .apple, rewrite: .apple, readAloud: .apple, voice: .standard)
+        let r = ModelGrade.readout(
+            speech: .apple, rewrite: .apple, readAloud: .apple, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        )
         #expect(r.quality == .good)
         #expect(r.speed == .instant)
         #expect(r.leavesMac == false)
@@ -81,7 +84,10 @@ struct ModelGradeTests {
 
     @Test("The recommended local setup reads excellent and fast")
     func readoutRecommended() {
-        let r = ModelGrade.readout(speech: .local, rewrite: .apple, readAloud: .local, voice: .standard)
+        let r = ModelGrade.readout(
+            speech: .local, rewrite: .apple, readAloud: .local, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        )
         #expect(r.quality == .excellent)
         #expect(r.speed == .fast)
         #expect(r.leavesMac == false)
@@ -89,14 +95,47 @@ struct ModelGradeTests {
 
     @Test("Any cloud job means work leaves the Mac")
     func readoutLeavesMac() {
-        #expect(ModelGrade.readout(speech: .apple, rewrite: .cloud, readAloud: .apple, voice: .standard).leavesMac)
-        #expect(ModelGrade.readout(speech: .apple, rewrite: .apple, readAloud: .cloud, voice: .standard).leavesMac)
+        #expect(ModelGrade.readout(
+            speech: .apple, rewrite: .cloud, readAloud: .apple, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        ).leavesMac)
+        #expect(ModelGrade.readout(
+            speech: .apple, rewrite: .apple, readAloud: .cloud, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        ).leavesMac)
+    }
+
+    /// M4: Rewrite set to Apple, read-aloud engine set to Apple — but an AI reading mode
+    /// points its own override at a cloud provider. Nothing in `pairs` sees this call, so
+    /// without the extra flag the readout would print "This Mac" while a summary is
+    /// uploaded — the exact false locality claim this parameter exists to close.
+    @Test("A cloud read-aloud AI override leaves the Mac even when every job reads Apple")
+    func readoutReadAloudOverrideLeavesMac() {
+        let r = ModelGrade.readout(
+            speech: .apple, rewrite: .apple, readAloud: .apple, voice: .standard,
+            readAloudAIOverrideIsCloud: true
+        )
+        #expect(r.leavesMac)
+    }
+
+    /// The flag only matters when it's true — it must never manufacture a caution dot for
+    /// a fully local setup.
+    @Test("No override flag means the readout can still claim This Mac")
+    func readoutNoOverrideStaysLocal() {
+        let r = ModelGrade.readout(
+            speech: .local, rewrite: .apple, readAloud: .local, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        )
+        #expect(r.leavesMac == false)
     }
 
     @Test("Fractions are the mean over three")
     func readoutFractions() {
         // speech local 2 + rewrite apple 2 + readAloud apple 1 = 5/9
-        let r = ModelGrade.readout(speech: .local, rewrite: .apple, readAloud: .apple, voice: .standard)
+        let r = ModelGrade.readout(
+            speech: .local, rewrite: .apple, readAloud: .apple, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        )
         #expect(abs(r.qualityFraction - 5.0 / 9.0) < 0.0001)
     }
 
@@ -104,7 +143,10 @@ struct ModelGradeTests {
     /// is what the disabled segment prevents the user reaching anyway.
     @Test("An impossible source falls back rather than trapping")
     func readoutImpossibleSource() {
-        let r = ModelGrade.readout(speech: .cloud, rewrite: .local, readAloud: .apple, voice: .standard)
+        let r = ModelGrade.readout(
+            speech: .cloud, rewrite: .local, readAloud: .apple, voice: .standard,
+            readAloudAIOverrideIsCloud: false
+        )
         #expect(r.quality == .good)
     }
 }
