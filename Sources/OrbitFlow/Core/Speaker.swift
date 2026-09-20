@@ -1,4 +1,5 @@
 import AVFoundation
+import FluidAudio
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
@@ -82,6 +83,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
 
         case .elevenLabs:
             speakWithElevenLabs(text)
+
+        case .kokoro:
+            speakWithKokoro(text)
         }
     }
 
@@ -185,6 +189,32 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         self.player = player
         isPreparing = false
         isSpeaking = true
+    }
+
+    // MARK: - Kokoro
+
+    /// Synthesis takes a beat, so this sets `isPreparing` exactly as the ElevenLabs path
+    /// does — a second press during that window would otherwise start a second synthesis
+    /// and talk over the first.
+    private func speakWithKokoro(_ text: String) {
+        isPreparing = true
+        let voice = Settings.shared.readAloudLocalVoice
+        let speed = Float(Settings.shared.readAloudSpeed)
+
+        Task { @MainActor in
+            do {
+                let manager = try await KokoroModels.shared.manager()
+                let wav = try await manager.synthesize(text: text, voice: voice, speed: speed)
+                guard isPreparing else { return }   // stop() ran while we were synthesising
+                isPreparing = false
+                playRendered(wav)
+            } catch {
+                isPreparing = false
+                fail(KokoroModels.isSupportedOS
+                    ? "Kokoro couldn't speak — \(error.localizedDescription)"
+                    : KokoroModels.unsupportedOSReason)
+            }
+        }
     }
 
     /// The account name under which the ElevenLabs key is stored, alongside the rewrite

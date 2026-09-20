@@ -616,6 +616,10 @@ struct SettingsPanel: View {
             .padding(DS.Space.base)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
+        case .unavailable:
+            // Parakeet has no OS gate — only Kokoro uses `.unavailable` — but
+            // `ModelPhase` is shared, so this switch has to stay exhaustive for it too.
+            EmptyView()
         }
     }
 

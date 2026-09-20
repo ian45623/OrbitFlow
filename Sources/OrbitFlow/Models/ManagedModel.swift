@@ -11,6 +11,12 @@ enum ModelPhase: Equatable {
     case working(label: String, fraction: Double)
     case ready
     case failed(String)
+    /// Can't be used on this machine, and no retry will change that today — e.g. Kokoro
+    /// gated off macOS 26.4/26.5 for the BNNS crash. Distinct from `.failed`, which means
+    /// something went wrong that trying again might fix: `ModelStateCard` gives `.failed`
+    /// a "Try again" button, and offering that for a permanent condition would just
+    /// re-run the same check and land back here, which is a lie dressed up as an action.
+    case unavailable(String)
 }
 
 /// A model the user can download, select and delete.

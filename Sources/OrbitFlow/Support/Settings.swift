@@ -91,11 +91,14 @@ enum VoiceEngine: String, CaseIterable, Sendable {
     case system
     /// ElevenLabs over the network, billed per character.
     case elevenLabs
+    /// Kokoro-82M on the Neural Engine. Downloaded, and nothing leaves the Mac.
+    case kokoro
 
     var displayName: String {
         switch self {
         case .system: "System"
         case .elevenLabs: "ElevenLabs"
+        case .kokoro: "Kokoro"
         }
     }
 }
@@ -215,6 +218,12 @@ final class Settings {
     /// `AVSpeechSynthesisVoice(identifier:)` returns nil for it and the utterance falls back.
     var readAloudVoice: String? {
         didSet { defaults.set(readAloudVoice, forKey: Keys.readAloudVoice) }
+    }
+
+    /// Which Kokoro voice speaks. Separate from `readAloudVoice`, which names an
+    /// AVSpeechSynthesis voice — the two vocabularies have nothing in common.
+    var readAloudLocalVoice: String {
+        didSet { defaults.set(readAloudLocalVoice, forKey: Keys.readAloudLocalVoice) }
     }
 
     /// How fast the voice reads, as a multiple of its natural rate.
@@ -348,6 +357,7 @@ final class Settings {
         static let hudSize = "hudSize"
         static let readAloudEnabled = "readAloudEnabled"
         static let readAloudVoice = "readAloudVoice"
+        static let readAloudLocalVoice = "readAloudLocalVoice"
         static let readAloudSpeed = "readAloudSpeed"
         static let readingMode = "readingMode"
         static let readingModeCustomLabel = "readingModeCustomLabel"
@@ -430,6 +440,7 @@ final class Settings {
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
         readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false
         readAloudVoice = defaults.string(forKey: Keys.readAloudVoice)
+        readAloudLocalVoice = defaults.string(forKey: Keys.readAloudLocalVoice) ?? "af_heart"
         // Through NSNumber, not `as? Float`: UserDefaults hands a stored number back as
         // NSNumber, and bridging that straight to Float fails for any value it can't
         // represent exactly — which would silently reset the speed on every launch.

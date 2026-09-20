@@ -67,6 +67,19 @@ struct ModelStateCard<Model: ManagedModel>: View {
             }
             .padding(.top, DS.Space.tight)
 
+        case .unavailable(let reason):
+            // Same look as `.failed` — a dot plus the reason in words, never color alone
+            // — but no action follows in `action` below. Nothing the user does here
+            // changes a permanent condition, so there is nothing honest to offer.
+            HStack(alignment: .top, spacing: DS.Space.snug) {
+                StatusDot(color: DS.Color.signal, isOn: true)
+                Text(reason)
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, DS.Space.tight)
+
         case .missing:
             EmptyView()
         }
@@ -81,7 +94,7 @@ struct ModelStateCard<Model: ManagedModel>: View {
             }
         case .failed:
             ActionButton(title: "Try again", kind: .primary) { model.start() }
-        case .working:
+        case .working, .unavailable:
             EmptyView()
         case .ready:
             ActionButton(title: "Remove", kind: .quiet) { isConfirmingRemove = true }

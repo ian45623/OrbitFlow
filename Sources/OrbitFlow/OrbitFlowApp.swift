@@ -326,6 +326,10 @@ private struct MenuContent: View {
                 Button("Download Parakeet model (470 MB)…") { parakeet.start() }
             case .failed:
                 Button("Parakeet download failed — try again") { parakeet.start() }
+            case .unavailable:
+                // Parakeet has no OS gate — only Kokoro uses this case — but `ModelPhase`
+                // is shared, so the switch has to stay exhaustive for it too.
+                EmptyView()
             }
         }
 
