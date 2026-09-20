@@ -24,6 +24,7 @@ let package = Package(
         // logic worth testing without a network or a running app.
         .target(
             name: "OrbitFlowAIRewrite",
+            dependencies: ["OrbitFlowModels"],
             path: "Sources/OrbitFlowAIRewrite",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -82,7 +83,7 @@ let package = Package(
         ),
         .testTarget(
             name: "OrbitFlowAIRewriteTests",
-            dependencies: ["OrbitFlowAIRewrite"],
+            dependencies: ["OrbitFlowAIRewrite", "OrbitFlowModels"],
             path: "Tests/OrbitFlowAIRewriteTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

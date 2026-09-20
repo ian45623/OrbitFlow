@@ -579,6 +579,7 @@ final class DictationController {
         let target = resolvedTarget()
         let engine = OnDemandRewrite.engine(
             use: Settings.shared.aiRewriteUse,
+            source: Settings.shared.rewriteSource,
             hasKey: KeyStore.hasKey(account: target.provider.rawValue),
             model: target.model,
             onDeviceAvailable: OnDeviceRewriter.isAvailable

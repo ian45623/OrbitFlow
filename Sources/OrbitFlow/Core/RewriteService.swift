@@ -91,6 +91,7 @@ final class RewriteService: NSObject {
         let engine: OnDemandRewrite.Engine
         switch OnDemandRewrite.engine(
             use: settings.aiRewriteUse,
+            source: settings.rewriteSource,
             hasKey: hasKey,
             model: model,
             onDeviceAvailable: OnDeviceRewriter.isAvailable

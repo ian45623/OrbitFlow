@@ -4,6 +4,7 @@ import Observation
 import OrbitFlowAIRewrite
 import OrbitFlowHistory
 import OrbitFlowHotkey
+import OrbitFlowModels
 
 /// Which speech engine transcribes an utterance.
 enum SpeechEngineChoice: String, CaseIterable, Sendable {
@@ -164,6 +165,15 @@ final class Settings {
     /// never here.
     var aiProvider: AIProvider {
         didSet { defaults.set(aiProvider.rawValue, forKey: Keys.aiProvider) }
+    }
+
+    /// Which rewrite engine runs — the AI Models page's Rewrite row.
+    ///
+    /// New in this build. Before it, the engine was implicit: a stored key and model
+    /// meant cloud, anything else meant on-device. That rule is reproduced in `init` so
+    /// nobody's engine changes under them; from here it is a choice.
+    var rewriteSource: ModelSource {
+        didSet { defaults.set(rewriteSource.rawValue, forKey: Keys.rewriteSource) }
     }
 
     /// Free text, because the model list is fetched from the provider and a provider may
@@ -327,6 +337,7 @@ final class Settings {
         static let legacyTierBeforeCloud = "tierBeforeCloud"
         static let aiProvider = "aiProvider"
         static let aiModel = "aiModel"
+        static let rewriteSource = "rewriteSource"
         static let rewriteMode = "rewriteMode"
         static let autoUpdate = "autoUpdate"
         static let onboardingCompleted = "onboardingCompleted"
@@ -387,7 +398,18 @@ final class Settings {
             rawValue: defaults.string(forKey: Keys.aiProvider) ?? ""
         ) ?? .anthropic
         aiProvider = resolvedProvider
-        aiModel = defaults.string(forKey: Keys.aiModel) ?? resolvedProvider.defaultModel
+        // Resolved into a local for the same reason `resolvedProvider` is: reading
+        // `aiModel` back through its @Observable-backed getter here, before every stored
+        // property finishes initializing, is a compile error.
+        let resolvedModel = defaults.string(forKey: Keys.aiModel) ?? resolvedProvider.defaultModel
+        aiModel = resolvedModel
+        // Reproduces exactly what OnDemandRewrite.engine used to decide on its own: a
+        // working key and model meant cloud, everything else meant on-device. Without
+        // this, every existing user with a key would silently move to Apple Intelligence.
+        rewriteSource = ModelSource(rawValue: defaults.string(forKey: Keys.rewriteSource) ?? "")
+            ?? (KeyStore.hasKey(account: resolvedProvider.rawValue) && !resolvedModel.isEmpty
+                ? .cloud
+                : .apple)
         // Faithful by default, so turning AI rewrite on can't change the user's words
         // until they ask it to.
         rewriteMode = RewriteMode(

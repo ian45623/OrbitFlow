@@ -1,4 +1,5 @@
 import Foundation
+import OrbitFlowModels
 
 /// Which engine an on-demand rewrite uses, and why it can't run when it can't.
 ///
@@ -41,22 +42,33 @@ public enum OnDemandRewrite {
     }
 
     /// - Parameters:
-    ///   - hasKey: Whether a key is stored for the *current* provider. Switching
-    ///     providers switches which key this asks about.
-    ///   - model: The configured model id. Blank is not a working cloud setup — the
-    ///     request would fail — so it falls back exactly as a missing key does.
-    ///   - onDeviceAvailable: `OnDeviceRewriter.isAvailable`, which is false on a Mac
-    ///     without Apple Intelligence or with it switched off.
+    ///   - source: What the user picked on the AI Models page. `.local` maps to
+    ///     on-device: for rewriting, Apple Intelligence *is* the local model, so that is
+    ///     the honest mapping rather than a placeholder for something missing.
+    ///   - hasKey: Whether a key is stored for the *current* provider.
+    ///   - model: The configured model id. Blank is not a working cloud setup.
+    ///   - onDeviceAvailable: `OnDeviceRewriter.isAvailable`.
     public static func engine(
         use: AIRewriteUse,
+        source: ModelSource,
         hasKey: Bool,
         model: String,
         onDeviceAvailable: Bool
     ) -> Result<Engine, Unavailable> {
         guard use.servesOnDemand else { return .failure(Unavailable.turnedOff) }
         let hasModel = !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if hasKey, hasModel { return .success(Engine.cloud) }
-        if onDeviceAvailable { return .success(Engine.onDevice) }
+        let cloudWorks = hasKey && hasModel
+
+        // Each branch still falls back rather than refusing. This runs from the Services
+        // menu, where doing nothing reads as a broken feature rather than a setting.
+        switch source {
+        case .apple, .local:
+            if onDeviceAvailable { return .success(Engine.onDevice) }
+            if cloudWorks { return .success(Engine.cloud) }
+        case .cloud:
+            if cloudWorks { return .success(Engine.cloud) }
+            if onDeviceAvailable { return .success(Engine.onDevice) }
+        }
         return .failure(Unavailable.nothingAvailable)
     }
 }

@@ -1,16 +1,18 @@
 import Testing
 
 @testable import OrbitFlowAIRewrite
+import OrbitFlowModels
 
 struct OnDemandRewriteTests {
     private func decide(
         use: AIRewriteUse = .onDemand,
+        source: ModelSource = .cloud,
         hasKey: Bool = true,
         model: String = "claude-sonnet-4-5",
         onDevice: Bool = true
     ) -> Result<OnDemandRewrite.Engine, OnDemandRewrite.Unavailable> {
         OnDemandRewrite.engine(
-            use: use, hasKey: hasKey, model: model, onDeviceAvailable: onDevice
+            use: use, source: source, hasKey: hasKey, model: model, onDeviceAvailable: onDevice
         )
     }
 
@@ -63,5 +65,39 @@ struct OnDemandRewriteTests {
         ]
         #expect(Set(summaries).count == 2)
         #expect(summaries.allSatisfy { !$0.isEmpty })
+    }
+
+    /// The point of the new setting: a user with a working key can now say "use Apple
+    /// Intelligence anyway". Before this, having a key meant getting cloud, always.
+    @Test("Apple is honoured even when a key is configured")
+    func appleWinsOverConfiguredKey() {
+        #expect(decide(source: .apple) == .success(.onDevice))
+    }
+
+    /// For rewriting, Apple Intelligence *is* the local model. A stored `.local` from a
+    /// future build must still produce an engine rather than falling off the end.
+    @Test("Local maps to on-device")
+    func localIsOnDevice() {
+        #expect(decide(source: .local) == .success(.onDevice))
+    }
+
+    /// Apple selected on a Mac that cannot run it still has to do something. Falling
+    /// back to a configured cloud beats refusing.
+    @Test("Apple without Apple Intelligence falls back to a configured cloud")
+    func appleFallsBackToCloud() {
+        #expect(decide(source: .apple, onDevice: false) == .success(.cloud))
+    }
+
+    @Test("Apple with neither Apple Intelligence nor a key is unavailable")
+    func appleWithNothing() {
+        #expect(decide(source: .apple, hasKey: false, onDevice: false) == .failure(.nothingAvailable))
+    }
+
+    /// Unchanged: cloud without a working key still falls back rather than failing,
+    /// because this path is reached from the Services menu where a silent no-op reads
+    /// as a broken feature.
+    @Test("Cloud without a key still falls back to on-device")
+    func cloudWithoutKey() {
+        #expect(decide(source: .cloud, hasKey: false) == .success(.onDevice))
     }
 }
