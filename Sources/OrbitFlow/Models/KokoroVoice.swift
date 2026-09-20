@@ -86,6 +86,14 @@ actor KokoroModels {
         return !(v.minorVersion >= 4 && v.minorVersion <= 5)
     }
 
+    /// The most phonemes one synthesis call may carry.
+    ///
+    /// Kokoro's ALBERT context window is 512 tokens, leaving 510 for phonemes once BOS and
+    /// EOS are accounted for — about ninety words. Past it `synthesize` throws rather than
+    /// truncating, which is why a passage is chunked before it is spoken. Ten below the
+    /// hard cap so a boundary landing on punctuation cannot tip a chunk over it.
+    nonisolated static let maxPhonemes = 500
+
     nonisolated static let unsupportedOSReason =
         "Kokoro can crash on macOS 26.4 and 26.5 because of a bug in Apple's BNNS "
         + "framework. Update to macOS 26.6 or later to use it."

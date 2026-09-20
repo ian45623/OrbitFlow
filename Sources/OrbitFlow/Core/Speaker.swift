@@ -1,5 +1,6 @@
 import AVFoundation
 import FluidAudio
+import OrbitFlowModels
 import Foundation
 import Observation
 import OrbitFlowAIRewrite
@@ -50,6 +51,22 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// wholesale above a handful of entries rather than evicting by age: one passage can
     /// only produce nine, and the settings are part of the key rather than an invalidation
     /// step, so picking a new voice cannot replay the old one.
+    /// Kokoro speaks a passage in pieces — see `speakWithKokoro`. These hold the pieces
+    /// that have not been spoken yet, the one already rendered and waiting its turn, and
+    /// the task rendering the one after that. All three are cleared by `stop()`: a passage
+    /// the user has moved past must not keep synthesising in the background, and must
+    /// certainly not start talking again two chunks later.
+    @ObservationIgnored private var kokoroQueue: [String] = []
+    @ObservationIgnored private var kokoroNext: Data?
+    @ObservationIgnored private var kokoroPrefetch: Task<Void, Never>?
+    /// Whether a chunk is rendering right now. A separate flag rather than testing
+    /// `kokoroPrefetch != nil`, because a finished task leaves its handle behind and the
+    /// passage would never be allowed to end.
+    @ObservationIgnored private var kokoroRendering = false
+    /// Fixed for the passage, so a voice changed mid-read cannot splice two voices
+    /// together across a chunk boundary.
+    @ObservationIgnored private var kokoroVoice = ""
+
     @ObservationIgnored private var rendered: [String: Data] = [:]
 
     private override init() {
@@ -101,6 +118,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     func stop() {
         fetch?.cancel()
         fetch = nil
+        // Kokoro's remaining chunks, the one already rendered, and the render in flight.
+        // Without this a stopped passage resumes when the next chunk lands.
+        kokoroPrefetch?.cancel()
+        kokoroPrefetch = nil
+        kokoroQueue = []
+        kokoroNext = nil
+        kokoroRendering = false
         player?.stop()
         player = nil
         failure = nil
@@ -227,15 +251,36 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         fetch = Task { @MainActor in
             do {
                 let manager = try await KokoroModels.shared.manager()
-                // Speed is applied on playback by `playRendered`, exactly as it already is
-                // for ElevenLabs (see the comment there) — never passed to `synthesize`
-                // too. Doing both compounds: 1.5x here plus 1.5x again on `player.rate`
-                // plays at roughly 2.25x, and 2x clips at `AVAudioPlayer`'s own ceiling.
-                let wav = try await manager.synthesize(
-                    text: text, voice: voice, speed: KokoroAneConstants.defaultSpeed)
+                // G2P first, then chunk, then synthesise — rather than one `synthesize`
+                // call over the whole passage. Kokoro's context window caps a call at 510
+                // phonemes, about ninety words, and it throws rather than truncating, so
+                // the old single call went silent on any real selection.
+                let phonemes = try await manager.phonemes(for: text)
                 guard !Task.isCancelled else { return }
+                var chunks = PhonemeChunker.chunk(phonemes, maxLength: KokoroModels.maxPhonemes)
+                guard !chunks.isEmpty else {
+                    isPreparing = false
+                    return fail("Nothing to read")
+                }
+
+                // Only the first chunk is waited for. Ninety words of speech runs about
+                // half a minute and the next chunk renders in a couple of seconds, so the
+                // queue stays ahead and the seams are inaudible — where rendering the
+                // whole passage up front would leave a long selection silent for tens of
+                // seconds with nothing but a spinner.
+                let first = chunks.removeFirst()
+                // Speed is applied on playback by `playRendered`, exactly as it already is
+                // for ElevenLabs (see the comment there) — never passed to synthesis too.
+                // Doing both compounds: 1.5x here plus 1.5x again on `player.rate` plays
+                // at roughly 2.25x, and 2x clips at `AVAudioPlayer`'s own ceiling.
+                let wav = try await manager.synthesizeFromPhonemes(
+                    first, voice: voice, speed: KokoroAneConstants.defaultSpeed)
+                guard !Task.isCancelled else { return }
+                kokoroQueue = chunks
+                kokoroVoice = voice
                 isPreparing = false
                 playRendered(wav)
+                renderNextKokoroChunk()
             } catch {
                 // One decision point, not two: `KokoroModels.manager()` can throw
                 // `CancellationError` for a *different* task's cancellation — `remove()`
@@ -252,6 +297,67 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                 fail("Kokoro couldn't speak — \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Renders the next chunk while the current one plays.
+    ///
+    /// Kept one ahead rather than rendering everything: a passage the user stops after ten
+    /// seconds should not have cost a minute of Neural Engine time, and holding one
+    /// rendered chunk is all the buffer the arithmetic needs.
+    private func renderNextKokoroChunk() {
+        guard !kokoroQueue.isEmpty else { return }
+        let next = kokoroQueue.removeFirst()
+        let voice = kokoroVoice
+        kokoroRendering = true
+        kokoroPrefetch = Task { @MainActor in
+            do {
+                let manager = try await KokoroModels.shared.manager()
+                let wav = try await manager.synthesizeFromPhonemes(
+                    next, voice: voice, speed: KokoroAneConstants.defaultSpeed)
+                guard !Task.isCancelled else { return }
+                kokoroRendering = false
+                kokoroNext = wav
+                // Playback may already have run dry waiting for this — the first chunk is
+                // short, or the machine is busy. Whoever is later starts the next chunk;
+                // `advanceKokoro` is a no-op when something is already playing.
+                advanceKokoro()
+            } catch {
+                guard !Task.isCancelled else { return }
+                kokoroRendering = false
+                // Abandon the rest rather than skipping the failed piece: a silent gap in
+                // the middle reads as "I missed a sentence", which is worse than stopping
+                // and saying so.
+                kokoroQueue = []
+                kokoroNext = nil
+                if player == nil {
+                    fail("Kokoro couldn't speak — \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Plays the next rendered chunk, or ends the passage when there are none left.
+    ///
+    /// Called from two places that race each other — the player finishing a chunk, and a
+    /// render finishing — because either can be last. `player == nil` is what makes it
+    /// safe to call from both.
+    private func advanceKokoro() {
+        guard player == nil else { return }
+        if let data = kokoroNext {
+            kokoroNext = nil
+            isPreparing = false
+            playRendered(data)
+            renderNextKokoroChunk()
+            return
+        }
+        // Nothing rendered yet but more to come: the render in flight will call back.
+        // `isPreparing` keeps `settle()` from declaring the passage over in the gap.
+        if !kokoroQueue.isEmpty || kokoroRendering {
+            isPreparing = true
+            return
+        }
+        isPreparing = false
+        settle()
     }
 
     /// The account name under which the ElevenLabs key is stored, alongside the rewrite
@@ -340,6 +446,12 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                   !current.isPlaying
             else { return }
             self.player = nil
+            // Mid-passage for Kokoro: the next chunk continues the same read, so the
+            // passage is not over and `settle()` must not say it is.
+            if self.kokoroNext != nil || !self.kokoroQueue.isEmpty || self.kokoroRendering {
+                self.advanceKokoro()
+                return
+            }
             self.isSpeaking = false
             self.spokenText = nil
         }
