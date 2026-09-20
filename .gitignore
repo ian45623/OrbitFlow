@@ -7,8 +7,10 @@
 /*.app/
 
 # Local ASR model weights. Large, redistributed under their own license, and
-# fetched on first use rather than committed.
-models/
+# fetched on first use rather than committed. Anchored to the repo root —
+# unanchored it matched Sources/OrbitFlow/Models/ too, because this repo has
+# core.ignorecase on.
+/models/
 *.onnx
 *.nemo
 .claude.md

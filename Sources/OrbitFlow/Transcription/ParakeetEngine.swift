@@ -216,24 +216,23 @@ actor ParakeetModels {
 /// could see a download the other had started.
 @MainActor
 @Observable
-final class ParakeetDownload {
+final class ParakeetDownload: ManagedModel {
     static let shared = ParakeetDownload()
 
-    enum Phase: Equatable {
-        case missing
-        case working(label: String, fraction: Double)
-        case ready
-        case failed(String)
-    }
+    nonisolated let id = "parakeet"
+    nonisolated let displayName = "Parakeet"
+    /// Confirmed against an installed copy, not estimated.
+    nonisolated let downloadSize = "470 MB"
+    nonisolated let summary =
+        "NVIDIA Parakeet on the Neural Engine. More accurate on English, and resolves "
+        + "when you let go rather than streaming as you speak."
 
     /// Seeded from disk, not from an in-memory flag — models downloaded in a previous
     /// launch are still downloaded.
-    private(set) var phase: Phase = ParakeetModels.isDownloaded ? .ready : .missing
+    private(set) var phase: ModelPhase = ParakeetModels.isDownloaded ? .ready : .missing
 
     /// Read once per state change rather than per redraw — it's a walk over ~600 files.
     private(set) var installedSize: Int64? = ParakeetModels.sizeOnDisk
-
-    var isWorking: Bool { if case .working = phase { true } else { false } }
 
     /// Idempotent: `ParakeetModels` coalesces concurrent loads, so a second press just
     /// joins the download already running.
