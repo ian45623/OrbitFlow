@@ -697,62 +697,95 @@ struct SettingsPanel: View {
 
             Hairline()
 
-            Picker("Voice", selection: $settings.readAloudEngine) {
-                ForEach(VoiceEngine.allCases, id: \.self) { engine in
-                    Text(engine.displayName).tag(engine)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            if settings.readAloudEngine == .system {
-                Hairline()
-
-                FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
-                let voices = readAloudVoices
-                Picker("", selection: Binding(
-                    // A saved voice outside the listed rows — uninstalled since, another
-                    // language, a novelty voice — has no row to select, and a picker with no
-                    // selection shows blank, so it shows as "System default". Only the
-                    // uninstalled one really speaks as the default.
-                    get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
-                    set: { settings.readAloudVoice = $0 }
-                )) {
-                    Text("System default").tag(String?.none)
-                    ForEach(voices, id: \.identifier) { voice in
-                        Text(voiceLabel(voice)).tag(String?.some(voice.identifier))
-                    }
-                }
-                .labelsHidden()
-                note("Premium and Enhanced voices sound far more natural. Download them in System "
-                    + "Settings ▸ Accessibility ▸ Spoken Content ▸ System voice ▸ Manage Voices.")
-                ActionButton(title: "Open Spoken Content settings", kind: .quiet) {
-                    Permissions.openSpokenContentSettings()
-                }
-
-                Hairline()
-
-                FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
-                HStack(spacing: DS.Space.base) {
-                    speedPicker
-                    // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
-                    // before a sound is made, and a second press during that window would
-                    // cancel a request already billed and send a duplicate.
-                    ActionButton(
-                        title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview",
-                        kind: .secondary
-                    ) {
-                        if speaker.isSpeaking || speaker.isPreparing {
-                            speaker.stop()
-                        } else {
-                            speaker.speak("This is how highlighted text will sound.")
-                        }
-                    }
-                }
-            } else {
+            // The engine itself is chosen in AI Models now; each branch below only
+            // configures whichever one is picked there. `VoiceEngine` has a `.kokoro`
+            // case that a two-way `if` would silently fold into the `else` (ElevenLabs)
+            // branch — Kokoro users would see an API key field for a model that needs
+            // no key. The three-case switch makes every case's UI its own branch, so
+            // adding a fourth engine later fails to compile here instead of misrouting.
+            switch settings.readAloudEngine {
+            case .system:
+                systemVoiceRows
+            case .kokoro:
+                kokoroVoiceRows
+            case .elevenLabs:
                 elevenLabsRows
+            }
+
+            Hairline()
+
+            FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
+            HStack(spacing: DS.Space.base) {
+                speedPicker
+                // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns
+                // before a sound is made, and a second press during that window would
+                // cancel a request already billed and send a duplicate.
+                ActionButton(
+                    title: speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview",
+                    kind: .secondary
+                ) {
+                    if speaker.isSpeaking || speaker.isPreparing {
+                        speaker.stop()
+                    } else {
+                        speaker.speak("This is how highlighted text will sound.")
+                    }
+                }
+                // ElevenLabs needs a key and a chosen voice before there is anything to
+                // preview; Preview living below the switch now, not inside its branch,
+                // means this disable has to be spelled out here instead of being implicit
+                // in whether the button was even built.
+                .disabled(
+                    settings.readAloudEngine == .elevenLabs
+                        && (!hasElevenLabsKey || settings.elevenLabsVoiceID.isEmpty)
+                )
             }
         }
         .frame(maxWidth: 520, alignment: .leading)
+    }
+
+    /// The system-voice picker, note, and button — unchanged from before AI Models
+    /// existed, just no longer gated behind an inline `if`.
+    @ViewBuilder
+    private var systemVoiceRows: some View {
+        FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
+        let voices = readAloudVoices
+        Picker("", selection: Binding(
+            // A saved voice outside the listed rows — uninstalled since, another
+            // language, a novelty voice — has no row to select, and a picker with no
+            // selection shows blank, so it shows as "System default". Only the
+            // uninstalled one really speaks as the default.
+            get: { settings.readAloudVoice.flatMap { id in voices.contains { $0.identifier == id } ? id : nil } },
+            set: { settings.readAloudVoice = $0 }
+        )) {
+            Text("System default").tag(String?.none)
+            ForEach(voices, id: \.identifier) { voice in
+                Text(voiceLabel(voice)).tag(String?.some(voice.identifier))
+            }
+        }
+        .labelsHidden()
+        note("Premium and Enhanced voices sound far more natural. Download them in System "
+            + "Settings ▸ Accessibility ▸ Spoken Content ▸ System voice ▸ Manage Voices.")
+        ActionButton(title: "Open Spoken Content settings", kind: .quiet) {
+            Permissions.openSpokenContentSettings()
+        }
+    }
+
+    /// Kokoro's ANE voice pack ships exactly one English voice today. The brief this
+    /// was built from listed five ids (Heart, Bella, Michael, Emma, George); checked
+    /// against the actual HuggingFace tree
+    /// (`FluidInference/kokoro-82m-coreml/ANE/`), only `af_heart.bin` is there —
+    /// requesting any of the other four 404s at synthesis time instead of speaking.
+    /// So this offers the one id that is real rather than four that throw.
+    private var kokoroVoiceRows: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
+            Picker("", selection: $settings.readAloudLocalVoice) {
+                Text("Heart (American, female)").tag("af_heart")
+            }
+            .labelsHidden()
+            note("The only voice Kokoro ships today. Downloaded with Kokoro — nothing is "
+                + "sent anywhere when it speaks.")
+        }
     }
 
     /// One speed control for both engines, mirroring the pill's menu.
@@ -821,20 +854,9 @@ struct SettingsPanel: View {
             ForEach(elevenLabsModels, id: \.self) { Text($0).tag($0) }
         }
         note("Flash is the fastest and about half the credit cost.")
-
-        FieldLabel(text: "Speed", color: DS.Color.ink, emphasis: true)
-        speedPicker
-        // `isPreparing` counts as busy too: with ElevenLabs, `speak()` returns before a
-        // sound is made, and a second press during that window would cancel a request
-        // already billed and send a duplicate.
-        Button(speaker.isSpeaking || speaker.isPreparing ? "Stop" : "Preview") {
-            if speaker.isSpeaking || speaker.isPreparing {
-                speaker.stop()
-            } else {
-                speaker.speak("This is how Orbit Flow will read your selection.")
-            }
-        }
-        .disabled(!hasElevenLabsKey || settings.elevenLabsVoiceID.isEmpty)
+        // Speed and Preview live below the switch in `readAloudSection` now, shared by
+        // all three engines — this used to have its own copy, which meant ElevenLabs
+        // showed two of each.
     }
 
     /// Voices for the user's language, best first. Novelty voices (Bells, Bubbles…) are
@@ -1149,15 +1171,11 @@ struct SettingsPanel: View {
     @ViewBuilder
     private var providerControls: some View {
         VStack(alignment: .leading, spacing: DS.Space.base) {
-            FieldLabel(text: "Provider", color: DS.Color.ink, emphasis: true)
-            // A menu rather than a Segmented: five options do not fit the 520pt measure,
-            // and this matches the Model picker directly below it.
-            Picker("", selection: $settings.aiProvider) {
-                ForEach(AIProvider.allCases, id: \.self) { provider in
-                    Text(provider.displayName).tag(provider)
-                }
-            }
-            .labelsHidden()
+            // The provider itself is chosen in AI Models now; this page only configures
+            // whichever one is picked there, so it has to say which that is.
+            Text("Configuring \(settings.aiProvider.displayName). Change the provider in AI Models.")
+                .font(DS.Font.caption)
+                .foregroundStyle(DS.Color.inkMuted)
 
             VStack(alignment: .leading, spacing: DS.Space.tight) {
                 FieldLabel(text: "API key")
