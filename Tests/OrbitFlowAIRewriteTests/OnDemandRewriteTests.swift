@@ -124,4 +124,44 @@ struct OnDemandRewriteTests {
         #expect(OnDemandRewrite.source(shared: .apple, hasOverride: false) == .apple)
         #expect(OnDemandRewrite.source(shared: .cloud, hasOverride: false) == .cloud)
     }
+
+    // MARK: - Read aloud does not answer to the AI-rewrite switch
+
+    /// The bug this fixes: a user with Apple Intelligence, no API key, and AI rewrite
+    /// left `off` pressed ▶ on a "One line" passage and got "AI off". Nothing was ever
+    /// spoken, because the refusal happens in the *text transform* stage — the voice,
+    /// local or otherwise, is never reached.
+    ///
+    /// `aiRewriteUse` owns whether *dictation* is rewritten and whether the Services
+    /// rows do anything. Read aloud is a separate feature with its own switch and its
+    /// own mode picker, so asking it to also turn on a dictation setting was wrong.
+    /// `available(...)` is the same decision without the permission question.
+    @Test("An available on-device model serves read aloud even when AI rewrite is off")
+    func readAloudIgnoresTheRewriteSwitch() {
+        #expect(
+            OnDemandRewrite.available(
+                source: .apple, hasKey: false, model: "", onDeviceAvailable: true
+            ) == .success(.onDevice)
+        )
+    }
+
+    /// Decoupling must not turn "nothing is configured" into a silent success — with no
+    /// key and no on-device model there is still nothing to transform with, and the pill
+    /// has to say so rather than appearing to work.
+    @Test("With no engine at all, read aloud still reports nothing available")
+    func readAloudWithNoEngine() {
+        #expect(
+            OnDemandRewrite.available(
+                source: .apple, hasKey: false, model: "", onDeviceAvailable: false
+            ) == .failure(.nothingAvailable)
+        )
+    }
+
+    /// The other half of the decoupling: the Services rows are exactly what `off` is for,
+    /// so `engine(use:...)` must keep refusing. If this ever passes `.success`, the off
+    /// switch has stopped meaning anything.
+    @Test("The Services rows still respect the off switch")
+    func servicesStillRespectOff() {
+        #expect(decide(use: .off) == .failure(.turnedOff))
+    }
 }

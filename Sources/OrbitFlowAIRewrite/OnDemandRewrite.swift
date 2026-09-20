@@ -75,11 +75,35 @@ public enum OnDemandRewrite {
         onDeviceAvailable: Bool
     ) -> Result<Engine, Unavailable> {
         guard use.servesOnDemand else { return .failure(Unavailable.turnedOff) }
+        return available(
+            source: source, hasKey: hasKey, model: model, onDeviceAvailable: onDeviceAvailable
+        )
+    }
+
+    /// The same choice, without the permission question — which engine *could* run.
+    ///
+    /// Split out because two callers ask different things. The Services rows ask "am I
+    /// allowed to, and with what" — `off` is exactly what that setting is for, so
+    /// `engine(use:...)` refuses. Read aloud asks only "with what": it has its own
+    /// switch and its own mode picker, and a user who turned it on and chose One line
+    /// has already said what they want twice.
+    ///
+    /// Gating read aloud on `aiRewriteUse` sent a user with Apple Intelligence, no key,
+    /// and rewrite left `off` to "AI off" on every AI reading mode — a refusal raised in
+    /// the text-transform stage, so the voice was never reached and no amount of fixing
+    /// the voice could have helped. Keep these two questions apart.
+    public static func available(
+        source: ModelSource,
+        hasKey: Bool,
+        model: String,
+        onDeviceAvailable: Bool
+    ) -> Result<Engine, Unavailable> {
         let hasModel = !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let cloudWorks = hasKey && hasModel
 
-        // Each branch still falls back rather than refusing. This runs from the Services
-        // menu, where doing nothing reads as a broken feature rather than a setting.
+        // Each branch falls back rather than refusing: a configured feature that goes
+        // silent reads as broken, where one that quietly uses the other engine reads as
+        // working.
         switch source {
         case .apple, .local:
             if onDeviceAvailable { return .success(Engine.onDevice) }

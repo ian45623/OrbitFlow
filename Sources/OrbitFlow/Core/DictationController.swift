@@ -592,8 +592,12 @@ final class DictationController {
             shared: Settings.shared.rewriteSource,
             hasOverride: Settings.shared.readAloudProviderOverride != nil
         )
-        let engine = OnDemandRewrite.engine(
-            use: Settings.shared.aiRewriteUse,
+        // `available`, not `engine(use:)`: read aloud must not answer to the AI-rewrite
+        // switch. That setting governs dictation and the Services rows; this feature has
+        // its own toggle and its own mode picker, and gating it here meant a user with
+        // Apple Intelligence, no key, and rewrite left off got "AI off" on every AI
+        // reading mode — a refusal raised before the voice was ever reached.
+        let engine = OnDemandRewrite.available(
             source: engineSource,
             hasKey: KeyStore.hasKey(account: target.provider.rawValue),
             model: target.model,
