@@ -7,14 +7,14 @@ import OrbitFlowStats
 /// "Cleanup & AI" rather than "Formatting", because the question people arrive with is
 /// "why is it rewording me", not "which formatter ran".
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case dictation, speechModel, cleanupAI, readAloud, dictionary, history, updates, general
+    case dictation, aiModels, cleanupAI, readAloud, dictionary, history, updates, general
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .dictation: "Dictation"
-        case .speechModel: "Speech model"
+        case .aiModels: "AI Models"
         case .cleanupAI: "Cleanup & AI"
         case .readAloud: "Read aloud"
         case .dictionary: "Dictionary"
@@ -29,7 +29,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .dictation: "How you start talking, and what lands in the other app."
-        case .speechModel: "What turns your voice into text."
+        case .aiModels: "Which model does each job, and whether it runs on this Mac."
         case .cleanupAI: "What happens to the words before they land."
         case .readAloud: "Having text read back to you."
         case .dictionary: "Words this Mac keeps getting wrong."

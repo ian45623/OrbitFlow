@@ -6,6 +6,7 @@ import SwiftUI
 import OrbitFlowAIRewrite
 import OrbitFlowHistory
 import OrbitFlowHotkey
+import OrbitFlowModels
 import OrbitFlowStats
 
 /// The settings content, shared by the Settings tab in the main window and the standard
@@ -39,11 +40,7 @@ struct SettingsPanel: View {
     /// a field.
     @State private var overrideKeyDraft = ""
 
-    /// Shared, so a download started from the menu bar — or by a first dictation —
-    /// shows up here too.
-    @State private var parakeet = ParakeetDownload.shared
     @State private var updater = Updater.shared
-    @State private var isConfirmingRemove = false
     @State private var isConfirmingClear = false
 
     /// Shortcut recording. The capture itself lives in `ShortcutRecorder`, shared with
@@ -155,15 +152,72 @@ struct SettingsPanel: View {
                     MetaLabel(text: controller.isHotkeyArmed ? "Hotkey armed" : "Hotkey off")
                 }
             }
+            if section == .aiModels {
+                modelReadout
+            }
         }
         .padding(.bottom, DS.Space.roomy)
+    }
+
+    /// Quality, speed, and where the work happens — the whole page in three lines.
+    ///
+    /// `Runs on` has no bar because where is not a quantity. It is the only line here
+    /// that can change colour, and it says "Mac + cloud" in words as well.
+    private var modelReadout: some View {
+        let readout = AIModelsSection.readout(for: settings)
+        return VStack(alignment: .leading, spacing: DS.Space.tight) {
+            bar("Quality", readout.qualityFraction, readout.quality.displayName)
+            bar("Speed", readout.speedFraction, readout.speed.displayName)
+            Hairline()
+            HStack(spacing: DS.Space.snug) {
+                Text("Runs on")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.inkMuted)
+                Spacer(minLength: DS.Space.snug)
+                StatusDot(
+                    color: readout.leavesMac ? DS.Color.caution : DS.Color.positive,
+                    isOn: true
+                )
+                Text(readout.leavesMac ? "Mac + cloud" : "This Mac")
+                    .font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.ink)
+            }
+        }
+        .padding(DS.Space.base)
+        .frame(width: 210)
+        .background(DS.Color.surface, in: .rect(cornerRadius: DS.Radius.control))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.control)
+                .strokeBorder(DS.Color.line, lineWidth: DS.Border.hairline)
+        )
+    }
+
+    private func bar(_ label: String, _ fraction: Double, _ value: String) -> some View {
+        HStack(spacing: DS.Space.snug) {
+            Text(label)
+                .font(DS.Font.caption)
+                .foregroundStyle(DS.Color.inkMuted)
+                .frame(width: 44, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(DS.Color.field)
+                    Capsule().fill(DS.Color.ink)
+                        .frame(width: max(2, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 4)
+            Text(value)
+                .font(DS.Font.caption)
+                .foregroundStyle(DS.Color.ink)
+                .frame(width: 62, alignment: .trailing)
+        }
     }
 
     @ViewBuilder
     private var sectionBody: some View {
         switch section {
         case .dictation: dictationSection
-        case .speechModel: speechModelSection
+        case .aiModels: aiModelsSection
         case .cleanupAI: cleanupSection
         case .readAloud: readAloudSection
         case .dictionary: dictionarySection
@@ -251,32 +305,10 @@ struct SettingsPanel: View {
         return DictationStats.over(samples, since: Date().addingTimeInterval(-7 * 24 * 60 * 60))
     }
 
-    // MARK: - Speech model
+    // MARK: - AI Models
 
-    private var speechModelSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(label: "Engine", help: "What transcribes your voice.") {
-                Segmented(
-                    options: SpeechEngineChoice.allCases.map {
-                        ($0, $0 == .apple ? "Apple" : "Parakeet")
-                    },
-                    selection: $settings.engine
-                )
-            } detail: {
-                note(settings.engine == .apple
-                    ? "Apple's on-device transcriber. Streams text while you speak, and needs no download."
-                    : "Parakeet on the Neural Engine. Resolves when you let go, and is more accurate on English.")
-            }
-
-            if settings.engine == .parakeet {
-                Hairline()
-                VStack(alignment: .leading, spacing: DS.Space.base) {
-                    MetaLabel(text: "Parakeet model")
-                    parakeetModelRow
-                }
-                .padding(.vertical, DS.Space.base)
-            }
-        }
+    private var aiModelsSection: some View {
+        AIModelsSection(settings: settings) { section = $0 }
     }
 
     // MARK: - Cleanup & AI
@@ -533,93 +565,6 @@ struct SettingsPanel: View {
             if !granted {
                 ActionButton(title: "Open System Settings", kind: .secondary, action: open)
             }
-        }
-    }
-
-    /// Picking Parakeet used to end in a sentence about a 470 MB download and no way to
-    /// start one: the only trigger was a menu bar item you had to find, or a first dictation
-    /// that stalled for minutes looking like a hang. The download belongs next to the choice
-    /// that needs it, with a number attached to the waiting.
-    @ViewBuilder
-    private var parakeetModelRow: some View {
-        switch parakeet.phase {
-        case .ready:
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                HStack(spacing: DS.Space.snug) {
-                    StatusDot(color: DS.Color.positive, isOn: true)
-                    // Says the thing the dot alone doesn't: yes, it's already here, and
-                    // this much of your disk is it.
-                    Text("Downloaded and ready\(parakeet.installedSize.map { " — \(byteCount($0)) on this Mac" } ?? ""). "
-                        + "Nothing left to install.")
-                        .font(DS.Font.caption)
-                        .foregroundStyle(DS.Color.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                ActionButton(title: "Remove model", kind: .quiet) { isConfirmingRemove = true }
-                    .confirmationDialog(
-                        "Remove the Parakeet model?",
-                        isPresented: $isConfirmingRemove
-                    ) {
-                        Button("Remove", role: .destructive) { parakeet.removeFromDisk() }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("Frees \(parakeet.installedSize.map(byteCount) ?? "about 470 MB"). "
-                            + "You can download it again from here at any time; dictation falls "
-                            + "back to Apple's engine until you do.")
-                    }
-            }
-            .padding(DS.Space.base)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
-        case .working(let label, let fraction):
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                ProgressView(value: fraction)
-                    .progressViewStyle(.linear)
-                    .tint(DS.Color.ink)
-                // Named phases rather than one bar: most of the wait is the download, but
-                // the compile at the end is slow and silent, and a bar parked at 100%
-                // reads as a hang.
-                Text("\(label)… \(Int(fraction * 100))% — this keeps going if you close "
-                    + "the window. Apple's engine still works meanwhile.")
-                    .font(DS.Font.caption)
-                    .foregroundStyle(DS.Color.inkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(DS.Space.base)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
-        case .missing, .failed:
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                if case .failed(let message) = parakeet.phase {
-                    HStack(alignment: .top, spacing: DS.Space.snug) {
-                        StatusDot(color: DS.Color.signal, isOn: true)
-                        Text("The download stopped: \(message)")
-                            .font(DS.Font.caption)
-                            .foregroundStyle(DS.Color.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else {
-                    Text("Parakeet runs entirely on your Mac, so its model has to live here: "
-                        + "a one-time 470 MB download. Nothing to find or install by hand — "
-                        + "press the button and it fetches itself.")
-                        .font(DS.Font.caption)
-                        .foregroundStyle(DS.Color.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                ActionButton(
-                    title: parakeet.phase == .missing ? "Download model (470 MB)" : "Try again",
-                    kind: .primary
-                ) {
-                    parakeet.start()
-                }
-            }
-            .padding(DS.Space.base)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Color.field, in: .rect(cornerRadius: DS.Radius.control))
-        case .unavailable:
-            // Parakeet has no OS gate — only Kokoro uses `.unavailable` — but
-            // `ModelPhase` is shared, so this switch has to stay exhaustive for it too.
-            EmptyView()
         }
     }
 
@@ -1295,10 +1240,6 @@ struct SettingsPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    private func byteCount(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     /// `Slider` works in `Double`, and a range split across two lines reads as a prefix
