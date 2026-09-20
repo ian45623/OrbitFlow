@@ -39,6 +39,15 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// so nothing else should reach for it.
     private(set) var spokenText: String?
 
+    /// Called when a passage reaches its natural end — never when `stop()` silences one and
+    /// never on a failure.
+    ///
+    /// `isSpeaking` going false cannot stand in for this: it is also how a stop and a
+    /// failure look. The distinction is the whole point of the callback — the pill lingers
+    /// after a passage finishes so ▶ can replay it, but a ✕ means the user is done and the
+    /// pill should go with it.
+    @ObservationIgnored var onFinished: (() -> Void)?
+
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
     @ObservationIgnored private var player: AVAudioPlayer?
     @ObservationIgnored private var fetch: Task<Void, Never>?
@@ -425,8 +434,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         // the extra checks this would race the ElevenLabs path and mark its passage
         // finished before a sound is ever made.
         guard !synthesizer.isSpeaking, !isPreparing, player == nil else { return }
+        // `stop()` clears `isSpeaking` before it cancels the utterance, so the `didCancel`
+        // that lands here afterwards finds it already false — which is exactly how a stop
+        // is told apart from a passage that ran to its end.
+        let wasSpeaking = isSpeaking
         isSpeaking = false
         spokenText = nil
+        if wasSpeaking { onFinished?() }
     }
 
     // MARK: - AVAudioPlayerDelegate
@@ -452,8 +466,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                 self.advanceKokoro()
                 return
             }
+            let wasSpeaking = self.isSpeaking
             self.isSpeaking = false
             self.spokenText = nil
+            if wasSpeaking { self.onFinished?() }
         }
     }
 }
