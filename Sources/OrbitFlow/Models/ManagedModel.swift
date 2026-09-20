@@ -3,9 +3,11 @@ import Observation
 
 /// What a downloadable model is doing.
 ///
-/// Lifted verbatim out of `ParakeetDownload` so Kokoro reports the same four states. The
-/// named `working` label matters: most of the wait is the download, but the CoreML
-/// compile at the end is slow and silent, and a bar parked at 100% reads as a hang.
+/// The first four cases were lifted verbatim out of `ParakeetDownload` so Kokoro could
+/// report the same states; `.unavailable` was added for Kokoro's OS gate and Parakeet
+/// never produces it. The named `working` label matters: most of the wait is the
+/// download, but the CoreML compile at the end is slow and silent, and a bar parked at
+/// 100% reads as a hang.
 enum ModelPhase: Equatable {
     case missing
     case working(label: String, fraction: Double)
@@ -23,8 +25,9 @@ enum ModelPhase: Equatable {
 ///
 /// One protocol so one card renders all of them. Each conformer owns its own storage
 /// location and fetch, because those genuinely differ — Parakeet lives in Application
-/// Support under FluidAudio's ASR layout, Kokoro under the TTS cache root — but the
-/// states they move through are identical, and the UI only cares about the states.
+/// Support under FluidAudio's ASR layout, Kokoro under the TTS cache root — but they
+/// move through the same `ModelPhase` states (Kokoro alone can also land on
+/// `.unavailable`), and the UI only cares about the states.
 @MainActor
 protocol ManagedModel: AnyObject, Observable {
     /// Stable identity, for `ForEach` and for logs.

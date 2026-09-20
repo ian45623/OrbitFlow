@@ -23,13 +23,17 @@ actor KokoroModels {
             .appendingPathComponent(".cache/fluidaudio/Models/kokoro-82m-coreml/ANE")
     }
 
-    /// FluidAudio keeps a second set of files — the shared BART G2P model and the Misaki
-    /// lexicon cache, ~24 MB — in a sibling directory rather than under `directory`,
-    /// because they're common to every Kokoro variant (English/Mandarin/Japanese) rather
-    /// than specific to this one. `sizeOnDisk` and `remove()` fold it in anyway: a
-    /// "Download 83 MB" button that silently pulls down 108 MB, or a "Remove" that
-    /// leaves 24 MB of orphaned files behind, would both be lying about disk usage —
-    /// exactly what Task 6's measurement rule exists to prevent.
+    /// Not a Kokoro-only directory, despite the name FluidAudio gives its folder:
+    /// `Repo.kokoro`'s cache holds the shared BART G2P model and Misaki lexicon
+    /// (~24 MB) that FluidAudio's StyleTTS2 and Inflect backends read from too, sitting
+    /// in a user-level cache (`~/.cache/fluidaudio`) rather than anything app-scoped.
+    /// OrbitFlow doesn't use those other backends today, so treating it as "Kokoro's"
+    /// here is harmless — but `remove()` below deletes this whole directory, which is
+    /// more than Kokoro's own assets, and would take a StyleTTS2/Inflect install down
+    /// with it on a build that added one. `sizeOnDisk` and `remove()` fold it in anyway:
+    /// a "Download 83 MB" button that silently pulls down 108 MB, or a "Remove" that
+    /// leaves 24 MB of files behind, would both be lying about disk usage — exactly what
+    /// Task 6's measurement rule exists to prevent.
     nonisolated static var g2pDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cache/fluidaudio/Models/kokoro")
@@ -38,12 +42,21 @@ actor KokoroModels {
     /// Checked from the filesystem, not an in-memory flag: models fetched in a previous
     /// launch are still downloaded.
     ///
+    /// Requires evidence from *both* directories `sizeOnDisk`/`remove()` account for.
+    /// Checking only `directory` would let a cleaned or partially-removed `g2pDirectory`
+    /// seed `phase` to `.ready` with `installedSize` under-reporting by ~24 MB — and the
+    /// next synthesis would silently re-download it with progress suppressed, since
+    /// `report(_:)` below no-ops once `phase == .ready`. To the user that reads as a hang.
+    ///
     /// Checks for `KokoroVocoder.mlmodelc`, not `Vocoder.mlmodelc` — confirmed against an
     /// actual download (Task 6 Step 1) that FluidAudio names every stage with a `Kokoro`
-    /// prefix (`KokoroAlbert.mlmodelc`, `KokoroVocoder.mlmodelc`, etc).
+    /// prefix (`KokoroAlbert.mlmodelc`, `KokoroVocoder.mlmodelc`, etc). `G2PEncoder.mlmodelc`
+    /// is likewise confirmed present in `g2pDirectory` after that same download.
     nonisolated static var isDownloaded: Bool {
         FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("KokoroVocoder.mlmodelc").path)
+        && FileManager.default.fileExists(
+            atPath: g2pDirectory.appendingPathComponent("G2PEncoder.mlmodelc").path)
     }
 
     nonisolated static var sizeOnDisk: Int64? {
@@ -153,11 +166,25 @@ final class KokoroDownload: ManagedModel {
         "Warmer, more natural speech than the system voices, generated on the Neural "
         + "Engine. Nothing is sent anywhere."
 
-    private(set) var phase: ModelPhase = KokoroModels.isDownloaded ? .ready : .missing
+    private(set) var phase: ModelPhase = KokoroDownload.currentPhase()
     /// Read once per state change rather than per redraw — it is a walk over the bundle.
     private(set) var installedSize: Int64? = KokoroModels.sizeOnDisk
 
+    /// What `phase` should read given the current disk state and OS — shared by `init`
+    /// and `removeFromDisk()` so both are honest about an unsupported OS. Without this,
+    /// a gated OS would seed `.missing` at launch (or after a remove) and the card would
+    /// offer "Download 108 MB" right up until the press that finds out it can't run here.
+    private static func currentPhase() -> ModelPhase {
+        guard KokoroModels.isSupportedOS else { return .unavailable(KokoroModels.unsupportedOSReason) }
+        return KokoroModels.isDownloaded ? .ready : .missing
+    }
+
     func start() {
+        // Checked first: a model already downloaded and ready has nothing to gain from
+        // re-running the OS check, and doing the check first would flip an already-usable
+        // `.ready` state to `.unavailable` on a machine that simply can't *start* a new
+        // download right now — which is a different fact than "this can't run".
+        guard phase != .ready, !isWorking else { return }
         guard KokoroModels.isSupportedOS else {
             // `.unavailable`, not `.failed`: the OS gate isn't a hiccup a retry can clear,
             // and `.failed`'s "Try again" button would just re-run this same check and
@@ -166,7 +193,6 @@ final class KokoroDownload: ManagedModel {
             phase = .unavailable(KokoroModels.unsupportedOSReason)
             return
         }
-        guard phase != .ready, !isWorking else { return }
         phase = .working(label: "Starting", fraction: 0)
         Task { _ = try? await KokoroModels.shared.manager() }
     }
@@ -178,7 +204,7 @@ final class KokoroDownload: ManagedModel {
             } catch {
                 Log.speech.error("Kokoro: couldn't delete models — \(error.localizedDescription)")
             }
-            phase = KokoroModels.isDownloaded ? .ready : .missing
+            phase = Self.currentPhase()
             installedSize = KokoroModels.sizeOnDisk
         }
     }

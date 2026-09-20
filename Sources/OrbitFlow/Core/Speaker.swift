@@ -4,7 +4,7 @@ import Foundation
 import Observation
 import OrbitFlowAIRewrite
 
-/// Reads text aloud, either with a system voice or an ElevenLabs one.
+/// Reads text aloud, with a system voice, an ElevenLabs one, or Kokoro running locally.
 ///
 /// One shared instance, because there is one speaker on the Mac: the pill, the History
 /// detail page and the Settings preview all speak through this, so starting any of them
@@ -13,18 +13,18 @@ import OrbitFlowAIRewrite
 /// Engine, voice and speed are read from `Settings` at the moment `speak` is called, so a
 /// change in Settings applies to the next thing read without anything having to observe it.
 ///
-/// The two backends never substitute for each other. A failed ElevenLabs call surfaces as
-/// an error rather than quietly becoming a system voice: switching voice, speed and
-/// character mid-passage with no explanation is more confusing than being told the key is
-/// wrong.
+/// The backends never substitute for each other. A failed ElevenLabs or Kokoro call
+/// surfaces as an error rather than quietly becoming a system voice: switching voice,
+/// speed and character mid-passage with no explanation is more confusing than being told
+/// the key is wrong, or that the model can't run here.
 @MainActor
 @Observable
 final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     static let shared = Speaker()
 
     private(set) var isSpeaking = false
-    /// True while ElevenLabs renders the audio — after ▶, before the first word. The
-    /// system backend is never in this state; it starts talking immediately.
+    /// True while ElevenLabs or Kokoro renders the audio — after ▶, before the first word.
+    /// The system backend is never in this state; it starts talking immediately.
     private(set) var isPreparing = false
     /// Why the last attempt produced no sound. Shown in the capsule; cleared by the next
     /// `speak` or `stop`.
@@ -169,8 +169,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         }
     }
 
-    /// Plays audio ElevenLabs has already sent us, whether that was a moment ago or the
-    /// last time this text was read.
+    /// Plays WAV audio a backend has already rendered — ElevenLabs's bytes (just arrived,
+    /// or replayed from `rendered`) or Kokoro's (always freshly synthesised; Kokoro doesn't
+    /// use `rendered`, see the note on it above).
     private func playRendered(_ data: Data) {
         guard let player = try? AVAudioPlayer(data: data) else {
             // `AVAudioPlayer(data:)` throws when the body isn't decodable audio — which is
@@ -197,22 +198,40 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     /// does — a second press during that window would otherwise start a second synthesis
     /// and talk over the first.
     private func speakWithKokoro(_ text: String) {
+        // The BNNS bug this guards against crashes the whole process, not just this call —
+        // there is no `catch` for a crash. So the gate has to sit here, ahead of anything
+        // that can reach `synthesize`, rather than only inside the `catch` below (which
+        // would just annotate a crash that already happened) or only in `KokoroDownload`
+        // (which nothing on this path calls).
+        guard KokoroModels.isSupportedOS else {
+            return fail(KokoroModels.unsupportedOSReason)
+        }
+
         isPreparing = true
         let voice = Settings.shared.readAloudLocalVoice
-        let speed = Float(Settings.shared.readAloudSpeed)
 
-        Task { @MainActor in
+        // Stored in `fetch`, exactly like the ElevenLabs path, so `stop()` can cancel it.
+        // Left fire-and-forget, a second ▶ before the first synthesis finishes would race
+        // two tasks against one `isPreparing` flag: whichever finished first would play,
+        // even if it's the passage the user already moved past.
+        fetch = Task { @MainActor in
             do {
                 let manager = try await KokoroModels.shared.manager()
-                let wav = try await manager.synthesize(text: text, voice: voice, speed: speed)
-                guard isPreparing else { return }   // stop() ran while we were synthesising
+                // Speed is applied on playback by `playRendered`, exactly as it already is
+                // for ElevenLabs (see the comment there) — never passed to `synthesize`
+                // too. Doing both compounds: 1.5x here plus 1.5x again on `player.rate`
+                // plays at roughly 2.25x, and 2x clips at `AVAudioPlayer`'s own ceiling.
+                let wav = try await manager.synthesize(
+                    text: text, voice: voice, speed: KokoroAneConstants.defaultSpeed)
+                guard !Task.isCancelled else { return }
                 isPreparing = false
                 playRendered(wav)
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled else { return }
                 isPreparing = false
-                fail(KokoroModels.isSupportedOS
-                    ? "Kokoro couldn't speak — \(error.localizedDescription)"
-                    : KokoroModels.unsupportedOSReason)
+                fail("Kokoro couldn't speak — \(error.localizedDescription)")
             }
         }
     }
