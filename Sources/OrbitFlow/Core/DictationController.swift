@@ -577,9 +577,18 @@ final class DictationController {
         }
 
         let target = resolvedTarget()
+        // Unlike RewriteService, this call can be pointed at a provider `rewriteSource`
+        // knows nothing about — see `OnDemandRewrite.source`'s doc comment. Do not
+        // "simplify" this to `Settings.shared.rewriteSource`. Named `engineSource`, not
+        // `source`, because this function already has a `source` parameter — the text
+        // being read aloud.
+        let engineSource = OnDemandRewrite.source(
+            shared: Settings.shared.rewriteSource,
+            hasOverride: Settings.shared.readAloudProviderOverride != nil
+        )
         let engine = OnDemandRewrite.engine(
             use: Settings.shared.aiRewriteUse,
-            source: Settings.shared.rewriteSource,
+            source: engineSource,
             hasKey: KeyStore.hasKey(account: target.provider.rawValue),
             model: target.model,
             onDeviceAvailable: OnDeviceRewriter.isAvailable

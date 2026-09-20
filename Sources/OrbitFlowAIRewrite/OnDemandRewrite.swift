@@ -41,6 +41,25 @@ public enum OnDemandRewrite {
         }
     }
 
+    /// Which `ModelSource` a call should be evaluated against.
+    ///
+    /// A per-feature override (read aloud's `readAloudProviderOverride`) is itself a
+    /// deliberate "use cloud" choice, made independently of the AI Models page's
+    /// `rewriteSource` row — see `AITarget.resolve`, which resolves the override's own
+    /// provider and model without ever consulting the shared `aiProvider`/`aiModel` pair
+    /// `rewriteSource` was migrated from. Falling back to the shared `rewriteSource`
+    /// whenever an override is set would silently drop a configured cloud override the
+    /// moment the *shared* provider happens to have no key, even though the override's
+    /// own provider does.
+    ///
+    /// - Parameters:
+    ///   - shared: `Settings.rewriteSource` — what the user picked for the shared engine.
+    ///   - hasOverride: Whether this call targets a `readAloudProviderOverride` rather
+    ///     than the shared provider.
+    public static func source(shared: ModelSource, hasOverride: Bool) -> ModelSource {
+        hasOverride ? .cloud : shared
+    }
+
     /// - Parameters:
     ///   - source: What the user picked on the AI Models page. `.local` maps to
     ///     on-device: for rewriting, Apple Intelligence *is* the local model, so that is

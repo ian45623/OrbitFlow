@@ -170,8 +170,12 @@ final class Settings {
     /// Which rewrite engine runs — the AI Models page's Rewrite row.
     ///
     /// New in this build. Before it, the engine was implicit: a stored key and model
-    /// meant cloud, anything else meant on-device. That rule is reproduced in `init` so
-    /// nobody's engine changes under them; from here it is a choice.
+    /// meant cloud, anything else meant on-device. That rule is reproduced in `init`, and
+    /// `init` writes the result back to defaults itself — `didSet` does not fire during
+    /// initialization — so it is stored, not just inferred fresh every launch. Without
+    /// that write, a user who pastes in a key and a model gets Apple on-device until they
+    /// quit and relaunch, because the in-memory value from this launch's inference never
+    /// reaches disk. From here it is a choice.
     var rewriteSource: ModelSource {
         didSet { defaults.set(rewriteSource.rawValue, forKey: Keys.rewriteSource) }
     }
@@ -406,8 +410,13 @@ final class Settings {
         // Reproduces exactly what OnDemandRewrite.engine used to decide on its own: a
         // working key and model meant cloud, everything else meant on-device. Without
         // this, every existing user with a key would silently move to Apple Intelligence.
+        // Trimmed exactly as `engine(...)` trims `model` before its own check — a
+        // whitespace-only stored model is not a working cloud setup, and without matching
+        // the trim here this migration would derive `.cloud` for a setup `engine(...)`
+        // itself resolves to on-device.
+        let hasResolvedModel = !resolvedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         rewriteSource = ModelSource(rawValue: defaults.string(forKey: Keys.rewriteSource) ?? "")
-            ?? (KeyStore.hasKey(account: resolvedProvider.rawValue) && !resolvedModel.isEmpty
+            ?? (KeyStore.hasKey(account: resolvedProvider.rawValue) && hasResolvedModel
                 ? .cloud
                 : .apple)
         // Faithful by default, so turning AI rewrite on can't change the user's words
@@ -455,10 +464,13 @@ final class Settings {
         }
         historyKeepsPinned = defaults.object(forKey: Keys.historyKeepsPinned) as? Bool ?? true
 
-        // `didSet` does not fire during initialization, so without these two writes the
-        // migration above would re-run on every launch and a legacy `cloud` string would
-        // sit in defaults forever.
+        // `didSet` does not fire during initialization, so without these writes the
+        // migrations above would re-run on every launch: a legacy `cloud` string would sit
+        // in defaults forever, and `rewriteSource` would stay a launch-time guess that a
+        // freshly pasted key and model couldn't change until the next relaunch — the
+        // in-memory result of this launch's inference would never reach disk.
         defaults.set(aiRewriteUse.rawValue, forKey: Keys.aiRewriteUse)
         defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier)
+        defaults.set(rewriteSource.rawValue, forKey: Keys.rewriteSource)
     }
 }

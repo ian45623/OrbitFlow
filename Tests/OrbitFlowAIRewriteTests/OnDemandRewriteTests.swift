@@ -100,4 +100,28 @@ struct OnDemandRewriteTests {
     func cloudWithoutKey() {
         #expect(decide(source: .cloud, hasKey: false) == .success(.onDevice))
     }
+
+    /// Fix round 1, finding 1: a read-aloud override is a deliberate "use cloud" choice,
+    /// made independently of the shared `rewriteSource`. Before this, a shared source of
+    /// `.apple` (as it is after migration when the *shared* provider has no key) silently
+    /// dropped a working override, because the override's own key was never consulted.
+    @Test("An override selects cloud even when the shared source is Apple")
+    func overrideOverridesSharedApple() {
+        let source = OnDemandRewrite.source(shared: .apple, hasOverride: true)
+        #expect(decide(source: source) == .success(.cloud))
+    }
+
+    /// An override changes *which* provider's key is asked about, not whether a missing
+    /// key still falls back — that fallback is what keeps read aloud from going silent.
+    @Test("An override without a key still falls back to on-device")
+    func overrideWithoutKeyFallsBack() {
+        let source = OnDemandRewrite.source(shared: .apple, hasOverride: true)
+        #expect(decide(source: source, hasKey: false) == .success(.onDevice))
+    }
+
+    @Test("No override follows the shared source")
+    func noOverrideFollowsShared() {
+        #expect(OnDemandRewrite.source(shared: .apple, hasOverride: false) == .apple)
+        #expect(OnDemandRewrite.source(shared: .cloud, hasOverride: false) == .cloud)
+    }
 }
