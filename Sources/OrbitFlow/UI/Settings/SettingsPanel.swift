@@ -100,9 +100,22 @@ struct SettingsPanel: View {
             keyDraft = ""
             settings.aiModel = settings.aiProvider.defaultModel
             refreshKeyPresence()
-            // A cloud rewrite with no key for this provider falls back on every call. Don't
-            // leave dictation armed for it; the on-demand rows degrade to on-device on their own.
-            if settings.aiRewriteUse == .always { settings.aiRewriteUse = .onDemand }
+            // A cloud rewrite with no key *and model* for this provider falls back on every
+            // call — the same "working cloud setup" OnDemandRewrite.engine and the Settings
+            // migration both use. Don't leave dictation armed for a setup that isn't there
+            // yet; the on-demand rows degrade to on-device on their own, but Always has no
+            // such per-call fallback message, so it needs to actually change.
+            //
+            // This used to read `if settings.aiRewriteUse == .always` with no further
+            // check, which was unreachable dead code while the Provider picker was gone —
+            // restoring the picker (C1) made it live, and unconditional was wrong: switching
+            // between two providers that both already have a working setup would still trip
+            // it and silently disarm dictation rewrite the user never touched.
+            let hasWorkingCloudSetup = hasStoredKey
+                && !settings.aiModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if settings.aiRewriteUse == .always, !hasWorkingCloudSetup {
+                settings.aiRewriteUse = .onDemand
+            }
         }
         .onChange(of: settings.readAloudProviderOverride) { refreshElevenLabsKeyPresence() }
         .onChange(of: settings.readAloudEnabled) { _, isOn in

@@ -175,17 +175,16 @@ final class DictationController {
     private var activeFormatter: any TextFormatter {
         if let formatter { return formatter }
         let settings = Settings.shared
-        // Cloud during dictation is exactly `.always`, and nothing else. Reading the
-        // setting that owns that decision — rather than inferring it from the tier —
-        // is what makes it impossible for `onDemand` to leak an utterance.
-        //
-        // `aiRewriteUse` only says *when* a rewrite may go to the cloud; `rewriteSource`
-        // says whether the AI Models page has actually pointed Rewrite *at* the cloud.
-        // Checking `rewritesDictation` alone let Always + Rewrite=Apple still build a
+        // `sendsDictationToCloud` is the one function that says whether this utterance may
+        // leave the Mac — see its doc comment. Checking `aiRewriteUse.rewritesDictation`
+        // alone here (as this guard once did) let Always + Rewrite=Apple still build a
         // `CloudFormatter` and upload every utterance while the header printed "This
         // Mac" — a false locality claim in an app whose whole promise is that voice never
-        // leaves the Mac. Both have to agree before dictation takes the cloud branch.
-        guard settings.aiRewriteUse.rewritesDictation, settings.rewriteSource == .cloud else {
+        // leaves the Mac. `isRewriting` and `draftRecord` below call the same function, so
+        // the formatter that actually runs, the "Rewriting…" indicator, and the history
+        // entry recorded for the run can't disagree about which one happened.
+        guard settings.aiRewriteUse.sendsDictationToCloud(rewriteSource: settings.rewriteSource)
+        else {
             switch settings.cleanupTier {
             case .rules: return RuleBasedFormatter()
             case .onDevice: return FoundationModelFormatter()
@@ -989,7 +988,11 @@ final class DictationController {
 
             // Only the cloud rewrite triggered by Always is slow enough to need saying
             // out loud; rules are instant and the on-device pass is bounded at four
-            // seconds.
+            // seconds. `sendsDictationToCloud` (not `rewritesDictation` alone) is what
+            // decides that — Always + Rewrite=Apple runs the same bounded on-device pass
+            // as any other local tier, and showing "Rewriting…" (and blocking
+            // `RewriteService`) for it would be announcing network latency that was never
+            // going to happen.
             //
             // Both writes are gated on the run token. Discarding does not cancel the tail
             // — it issues a new token and lets the in-flight work finish, suppressing only
@@ -998,8 +1001,9 @@ final class DictationController {
             // from under the live run: the HUD would stop saying "Rewriting…" while it is
             // still, in fact, rewriting.
             if token == runToken {
-                isRewriting = Settings.shared.cleanupEnabled
-                    && Settings.shared.aiRewriteUse.rewritesDictation
+                let settings = Settings.shared
+                isRewriting = settings.cleanupEnabled
+                    && settings.aiRewriteUse.sendsDictationToCloud(rewriteSource: settings.rewriteSource)
             }
             let cleaned = Settings.shared.cleanupEnabled
                 ? await activeFormatter.format(raw)
@@ -1080,7 +1084,13 @@ final class DictationController {
         let settings = Settings.shared
         let instruction: String
         let engine: String
-        if settings.aiRewriteUse.rewritesDictation {
+        // Must match `activeFormatter`'s own branch exactly, or history records a provider
+        // that never ran: `rewritesDictation` alone (Always, regardless of Rewrite's tier)
+        // used to gate this and would write "OpenAI · gpt-…" for text a local formatter
+        // produced whenever Rewrite was set to Apple — a false locality claim written to
+        // disk instead of just shown in the readout, and the one place users actually go
+        // to check what happened to their words.
+        if settings.aiRewriteUse.sendsDictationToCloud(rewriteSource: settings.rewriteSource) {
             instruction = settings.rewriteMode.displayName
             engine = "\(settings.aiProvider.displayName) · \(settings.aiModel)"
         } else {

@@ -1,6 +1,7 @@
 import Testing
 
 @testable import OrbitFlowAIRewrite
+import OrbitFlowModels
 
 struct AIRewriteUseTests {
     /// The whole point of the type: exactly one state sends dictation to the cloud.
@@ -11,6 +12,19 @@ struct AIRewriteUseTests {
         #expect(AIRewriteUse.always.rewritesDictation)
         #expect(!AIRewriteUse.onDemand.rewritesDictation)
         #expect(!AIRewriteUse.off.rewritesDictation)
+    }
+
+    /// `rewritesDictation` alone overclaims once `rewriteSource` exists: Always with
+    /// Rewrite=Apple must still take the local branch. This is the combined check every
+    /// dictation call site (the formatter, the "Rewriting…" flag, the history record)
+    /// has to share, or they drift the way this type's own doc comment warns against.
+    @Test("Dictation only reaches the cloud when both Always and Cloud are set")
+    func sendsDictationToCloud() {
+        #expect(AIRewriteUse.always.sendsDictationToCloud(rewriteSource: .cloud))
+        #expect(!AIRewriteUse.always.sendsDictationToCloud(rewriteSource: .apple))
+        #expect(!AIRewriteUse.always.sendsDictationToCloud(rewriteSource: .local))
+        #expect(!AIRewriteUse.onDemand.sendsDictationToCloud(rewriteSource: .cloud))
+        #expect(!AIRewriteUse.off.sendsDictationToCloud(rewriteSource: .cloud))
     }
 
     @Test("Only .off refuses the on-demand rows")
