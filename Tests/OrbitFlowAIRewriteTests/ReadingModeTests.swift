@@ -30,7 +30,7 @@ struct ReadingModeTests {
         let prompts = ReadingMode.allCases
             .filter { $0.usesAI && $0 != .custom }
             .map(\.systemPrompt)
-        #expect(prompts.count == 10)
+        #expect(prompts.count == 11)
         #expect(Set(prompts).count == prompts.count)
         #expect(prompts.allSatisfy { !$0.isEmpty })
     }
@@ -128,6 +128,36 @@ struct ReadingModeTests {
     @Test("To the point asks for a hard ceiling, not just brevity")
     func toThePointHasACeiling() {
         #expect(ReadingMode.toThePoint.systemPrompt.contains("at most three sentences"))
+    }
+
+    /// The mode exists for a highlighted word, and a bare gloss is not what was asked
+    /// for: the whole entry — meaning, similar words, one example — is the feature.
+    @Test("Synonyms asks for a spoken dictionary entry, not a bare gloss")
+    func synonymsReadsLikeADictionary() {
+        let prompt = ReadingMode.synonyms.systemPrompt
+        #expect(prompt.contains("what it means"))
+        #expect(prompt.contains("Similar words"))
+        #expect(prompt.contains("one short example sentence"))
+    }
+
+    /// Per the design, whatever is highlighted becomes the headword — a phrase is defined
+    /// as a phrase, not broken up and not refused.
+    @Test("Synonyms treats the whole highlight as the headword, however long")
+    func synonymsDefinesWhateverIsHighlighted() {
+        #expect(ReadingMode.synonyms.systemPrompt.contains("whole highlighted text"))
+    }
+
+    /// The shared preamble forbids adding anything not in the passage, which a definition
+    /// does by construction. The exception has to be stated, and stated narrowly: loosely
+    /// worded, it reads as permission to invent, which is the one thing the preamble is
+    /// there to stop.
+    @Test("Synonyms scopes its invented-facts exception to the term itself")
+    func synonymsScopesTheException() {
+        let prompt = ReadingMode.synonyms.systemPrompt
+        // Still inherits the rule it is carving an exception out of.
+        #expect(prompt.contains("Never add facts"))
+        #expect(prompt.contains("the only exception"))
+        #expect(prompt.contains("about the highlighted term"))
     }
 
     /// "1.0×" reads as a setting someone fiddled with; "1×" reads as normal.
