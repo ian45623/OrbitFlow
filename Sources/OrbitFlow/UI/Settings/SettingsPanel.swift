@@ -1171,11 +1171,18 @@ struct SettingsPanel: View {
     @ViewBuilder
     private var providerControls: some View {
         VStack(alignment: .leading, spacing: DS.Space.base) {
-            // The provider itself is chosen in AI Models now; this page only configures
-            // whichever one is picked there, so it has to say which that is.
-            Text("Configuring \(settings.aiProvider.displayName). Change the provider in AI Models.")
-                .font(DS.Font.caption)
-                .foregroundStyle(DS.Color.inkMuted)
+            FieldLabel(text: "Provider", color: DS.Color.ink, emphasis: true)
+            // A menu rather than a Segmented: five options do not fit the 520pt measure,
+            // and this matches the Model picker directly below it. AI Models chooses the
+            // *tier* (Apple/Local/Cloud) for rewrite; this is where the cloud tier's
+            // *provider* is actually chosen, so it has to live here rather than there —
+            // AI Models has nowhere to put a provider, key, and model for five providers.
+            Picker("", selection: $settings.aiProvider) {
+                ForEach(AIProvider.allCases, id: \.self) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .labelsHidden()
 
             VStack(alignment: .leading, spacing: DS.Space.tight) {
                 FieldLabel(text: "API key")
