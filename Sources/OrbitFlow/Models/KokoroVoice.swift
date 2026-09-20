@@ -180,10 +180,12 @@ final class KokoroDownload: ManagedModel {
     }
 
     func start() {
-        // Checked first: a model already downloaded and ready has nothing to gain from
-        // re-running the OS check, and doing the check first would flip an already-usable
-        // `.ready` state to `.unavailable` on a machine that simply can't *start* a new
-        // download right now — which is a different fact than "this can't run".
+        // Ready is checked before the OS gate, not because the gate is wrong —
+        // `isSupportedOS == false` really does mean "this can't run" — but because a
+        // model that's already downloaded and ready has nothing for `start()` to do, and
+        // running the OS check anyway would flip that working `.ready` state to
+        // `.unavailable` on every call, demoting a state this function didn't produce and
+        // has no business overwriting.
         guard phase != .ready, !isWorking else { return }
         guard KokoroModels.isSupportedOS else {
             // `.unavailable`, not `.failed`: the OS gate isn't a hiccup a retry can clear,

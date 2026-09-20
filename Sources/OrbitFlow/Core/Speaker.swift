@@ -169,9 +169,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
         }
     }
 
-    /// Plays WAV audio a backend has already rendered — ElevenLabs's bytes (just arrived,
-    /// or replayed from `rendered`) or Kokoro's (always freshly synthesised; Kokoro doesn't
-    /// use `rendered`, see the note on it above).
+    /// Plays audio a backend has already rendered — ElevenLabs's MP3 (just arrived, or
+    /// replayed from `rendered`) or Kokoro's WAV (always freshly synthesised; Kokoro
+    /// doesn't use `rendered`, see the note on it above). `AVAudioPlayer(data:)` decodes
+    /// either container without being told which one it's holding.
     private func playRendered(_ data: Data) {
         guard let player = try? AVAudioPlayer(data: data) else {
             // `AVAudioPlayer(data:)` throws when the body isn't decodable audio — which is
@@ -195,8 +196,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
     // MARK: - Kokoro
 
     /// Synthesis takes a beat, so this sets `isPreparing` exactly as the ElevenLabs path
-    /// does — a second press during that window would otherwise start a second synthesis
-    /// and talk over the first.
+    /// does, to show that beat in the UI. It isn't what stops a second press from talking
+    /// over the first, though — `speak()` calling `stop()` on the way in, which cancels
+    /// this call's task via `fetch`, is what does that. `isPreparing` is read, not relied on.
     private func speakWithKokoro(_ text: String) {
         // The BNNS bug this guards against crashes the whole process, not just this call —
         // there is no `catch` for a crash. So the gate has to sit here, ahead of anything
@@ -226,9 +228,17 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegat
                 guard !Task.isCancelled else { return }
                 isPreparing = false
                 playRendered(wav)
-            } catch is CancellationError {
-                return
             } catch {
+                // One decision point, not two: `KokoroModels.manager()` can throw
+                // `CancellationError` for a *different* task's cancellation — `remove()`
+                // cancels the shared `loadTask` a warm load reuses, which is not this
+                // call's own `fetch` task — so catching `is CancellationError` on its own
+                // would silently strand `isPreparing == true` for a request nobody
+                // actually stopped. `Task.isCancelled` asks the one question that matters:
+                // was *this* task cancelled? If yes, `stop()` already reset everything and
+                // there's nothing to touch. If no, this attempt genuinely failed — even if
+                // the error is a `CancellationError` — and has to clear `isPreparing` and
+                // say so, or nothing ever will.
                 guard !Task.isCancelled else { return }
                 isPreparing = false
                 fail("Kokoro couldn't speak — \(error.localizedDescription)")

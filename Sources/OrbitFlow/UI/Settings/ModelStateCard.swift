@@ -68,9 +68,9 @@ struct ModelStateCard<Model: ManagedModel>: View {
             .padding(.top, DS.Space.tight)
 
         case .unavailable(let reason):
-            // Same look as `.failed` — a dot plus the reason in words, never color alone
-            // — but no action follows in `action` below. Nothing the user does here
-            // changes a permanent condition, so there is nothing honest to offer.
+            // Same look as `.failed` — a dot plus the reason in words, never color alone.
+            // `action` below may still offer Remove: "can't run here" and "can't reclaim
+            // the space it's using" are different claims, and only the first is true here.
             HStack(alignment: .top, spacing: DS.Space.snug) {
                 StatusDot(color: DS.Color.signal, isOn: true)
                 Text(reason)
@@ -94,21 +94,47 @@ struct ModelStateCard<Model: ManagedModel>: View {
             }
         case .failed:
             ActionButton(title: "Try again", kind: .primary) { model.start() }
-        case .working, .unavailable:
+        case .working:
             EmptyView()
+        case .unavailable:
+            // Nothing the user does here makes the model runnable again — but if an
+            // earlier, supported OS already downloaded it, the bytes are still sitting on
+            // disk, and reclaiming them is a real, honest action distinct from "use it".
+            if model.installedSize != nil {
+                removeButton
+            } else {
+                EmptyView()
+            }
         case .ready:
-            ActionButton(title: "Remove", kind: .quiet) { isConfirmingRemove = true }
-                .confirmationDialog(
-                    "Remove \(model.displayName)?",
-                    isPresented: $isConfirmingRemove
-                ) {
-                    Button("Remove", role: .destructive) { model.removeFromDisk() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Frees \(model.installedSize.map(Self.byteCount) ?? model.downloadSize). "
-                        + "You can download it again from here at any time.")
-                }
+            removeButton
         }
+    }
+
+    /// Shared by `.ready` and `.unavailable` (when there's something on disk to free):
+    /// same button, same confirmation, only the promise afterward differs — see
+    /// `removeMessage`.
+    private var removeButton: some View {
+        ActionButton(title: "Remove", kind: .quiet) { isConfirmingRemove = true }
+            .confirmationDialog(
+                "Remove \(model.displayName)?",
+                isPresented: $isConfirmingRemove
+            ) {
+                Button("Remove", role: .destructive) { model.removeFromDisk() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(removeMessage)
+            }
+    }
+
+    /// `.ready` can re-download from this same card whenever it wants; `.unavailable`
+    /// can't — removing the files doesn't change whatever makes it unavailable — so the
+    /// two states can't share one closing line without one of them lying.
+    private var removeMessage: String {
+        let freed = "Frees \(model.installedSize.map(Self.byteCount) ?? model.downloadSize). "
+        if case .unavailable = model.phase {
+            return freed + "It won't offer to download again until it can run on this Mac."
+        }
+        return freed + "You can download it again from here at any time."
     }
 
     /// Bytes as the Finder would say them.
