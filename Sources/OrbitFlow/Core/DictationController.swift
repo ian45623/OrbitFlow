@@ -178,7 +178,14 @@ final class DictationController {
         // Cloud during dictation is exactly `.always`, and nothing else. Reading the
         // setting that owns that decision — rather than inferring it from the tier —
         // is what makes it impossible for `onDemand` to leak an utterance.
-        guard settings.aiRewriteUse.rewritesDictation else {
+        //
+        // `aiRewriteUse` only says *when* a rewrite may go to the cloud; `rewriteSource`
+        // says whether the AI Models page has actually pointed Rewrite *at* the cloud.
+        // Checking `rewritesDictation` alone let Always + Rewrite=Apple still build a
+        // `CloudFormatter` and upload every utterance while the header printed "This
+        // Mac" — a false locality claim in an app whose whole promise is that voice never
+        // leaves the Mac. Both have to agree before dictation takes the cloud branch.
+        guard settings.aiRewriteUse.rewritesDictation, settings.rewriteSource == .cloud else {
             switch settings.cleanupTier {
             case .rules: return RuleBasedFormatter()
             case .onDevice: return FoundationModelFormatter()
