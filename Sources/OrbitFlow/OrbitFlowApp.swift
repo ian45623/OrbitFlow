@@ -177,7 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Raises a window without needing SwiftUI's `openWindow` environment value — usable
-    /// from the app delegate and from a URL handler.
+    /// from the app delegate's own reopen handling and from plain app-layer code
+    /// (`SettingsPanel`, `RewriteService`) that has no environment to read it from.
+    /// There is no URL handler in this app; nothing here parses a URL scheme.
     ///
     /// Both scenes are `Window` rather than `WindowGroup`, so SwiftUI keeps the `NSWindow`
     /// alive after it's closed and this can find it again by title.

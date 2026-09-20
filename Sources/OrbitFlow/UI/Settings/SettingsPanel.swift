@@ -703,6 +703,8 @@ struct SettingsPanel: View {
             // branch — Kokoro users would see an API key field for a model that needs
             // no key. The three-case switch makes every case's UI its own branch, so
             // adding a fourth engine later fails to compile here instead of misrouting.
+            // `AIModelsSection.source(of:)` switches over the same enum to decide which
+            // segment is highlighted — that one needs the same treatment too.
             switch settings.readAloudEngine {
             case .system:
                 systemVoiceRows
@@ -775,14 +777,17 @@ struct SettingsPanel: View {
     /// against the actual HuggingFace tree
     /// (`FluidInference/kokoro-82m-coreml/ANE/`), only `af_heart.bin` is there —
     /// requesting any of the other four 404s at synthesis time instead of speaking.
-    /// So this offers the one id that is real rather than four that throw.
+    /// So this shows the one id that is real rather than offering a choice that isn't
+    /// one — a `Picker` with a single, permanently-selected option is a control that
+    /// promises a decision it can't deliver. A plain label makes the same true statement
+    /// without the promise. Turn this back into a picker when FluidInference ships more
+    /// ANE voices — `af_heart` won't be the only tag by then.
     private var kokoroVoiceRows: some View {
         VStack(alignment: .leading, spacing: DS.Space.snug) {
             FieldLabel(text: "Voice", color: DS.Color.ink, emphasis: true)
-            Picker("", selection: $settings.readAloudLocalVoice) {
-                Text("Heart (American, female)").tag("af_heart")
-            }
-            .labelsHidden()
+            Text("Heart (American, female)")
+                .font(DS.Font.body)
+                .foregroundStyle(DS.Color.ink)
             note("The only voice Kokoro ships today. Downloaded with Kokoro — nothing is "
                 + "sent anywhere when it speaks.")
         }

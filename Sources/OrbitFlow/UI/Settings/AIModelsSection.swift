@@ -215,7 +215,14 @@ struct AIModelsSection: View {
                         .padding(.vertical, DS.Space.snug)
                         .frame(maxWidth: .infinity)
                         .background {
-                            if selection.wrappedValue == source, reason == nil {
+                            // Drawn whenever this is the selection, disabled or not: a
+                            // synced-default or an OS downgrade can leave Kokoro both
+                            // selected and gated by `reason`, and a highlight gated on
+                            // `reason == nil` too would make that segment look
+                            // unselected — the control lying about its own state. The
+                            // text above still greys out through `reason`, so a disabled
+                            // selection reads as "chosen, but unavailable," not as live.
+                            if selection.wrappedValue == source {
                                 RoundedRectangle(cornerRadius: DS.Radius.control)
                                     .fill(DS.Color.surface)
                             }
