@@ -17,7 +17,10 @@ why Qwen 1.7B is not part of it.
 
 ## Layout
 
-The window is 860×600 (`SettingsWindow`), so the content pane is ~610pt. No scrolling.
+The window is 860×600 (`SettingsWindow`), so the content pane is ~610pt. The content pane
+is a `ScrollView`, the same as every other Settings section — this page gets no special
+treatment, and whether three panels plus a header actually fit without scrolling at that
+size was never measured. Don't repeat that claim without measuring it.
 
 **Header.** Title in `DS.Font.display`, one subtitle line, and on the right a readout boxed
 in `Surface` at ~210pt:
@@ -38,7 +41,11 @@ the state alone (rule 01); the words always say it too.
 
 - Job name in `DS.Font.display` (Source Serif 17) and its purpose in `caption`. The three
   jobs are what the page is for, so they outrank the model names inside them.
-- A `Segmented` — **Apple · Local · Cloud** — at most 330pt. Three short parallel words.
+- A three-way selector — **Apple · Local · Cloud** — at most 330pt. Three short parallel
+  words. This is not `Segmented`: a segment with nothing behind it (Speech ▸ Cloud,
+  Rewrite ▸ Local) has to stay on screen, disabled, with a tooltip saying why, and
+  `Segmented` has no notion of a disabled segment. `AIModelsSection.sourcePicker`
+  reimplements the same look as a row of buttons instead, each individually disable-able.
 - A hairline, then the state of whatever is selected: model name, one line, a status in
   `MetaLabel`, and an action on the right (Download / Remove / Configure).
 
@@ -56,7 +63,7 @@ a row in a list, and the user asked for the stronger separation. Depth stays at 
 | Job | Apple | Local | Cloud |
 |---|---|---|---|
 | Speech to text | `SpeechTranscriber`, streams while you speak | Parakeet, 470 MB | disabled — Orbit Flow has no cloud speech engine |
-| Rewrite | Apple Intelligence (`OnDeviceRewriter`) | disabled — Apple Intelligence already is the local model | the five `AIProvider` cases |
+| Rewrite | Apple Intelligence (`OnDeviceRewriter`) | disabled — Apple Intelligence already is the local model | whichever `AIProvider` is picked in Cleanup & AI |
 | Read aloud | `AVSpeechSynthesizer` system voices | **Kokoro** | ElevenLabs |
 
 **A segment with nothing behind it is disabled and says why on hover.** One rule, applied
@@ -124,7 +131,8 @@ so Kokoro is a sibling rather than a copy:
     var id: String { get }
     var displayName: String { get }
     var downloadSize: String { get }      // "470 MB", measured once and written in
-    var phase: ModelPhase { get }         // missing / working(label, fraction) / ready / failed
+    var summary: String { get }           // one line describing what it is, not selling it
+    var phase: ModelPhase { get }         // missing / working(label, fraction) / ready / failed / unavailable(reason)
     var installedSize: Int64? { get }
     func start()
     func removeFromDisk()
@@ -134,11 +142,18 @@ so Kokoro is a sibling rather than a copy:
 `ParakeetDownload` conforms with no behaviour change. `KokoroDownload` conforms alongside.
 One SwiftUI view, `ModelStateCard`, renders any conformer. A future local model is then a
 conformance and a `ModelGrade` row rather than a screen — which is the point of the protocol
-even though only two models exist today.
+even though only two models exist today. The protocol also carries `summary`, added after
+this draft: `ModelStateCard` needs a one-line description under the name for both models,
+and a property is what lets the card render it without knowing which conformer it has.
 
-`ModelPhase` is `ParakeetDownload.Phase` lifted out verbatim, including `.working(label:
-fraction:)` — the named phases exist because the compile step after a download is slow and
-silent, and a bar parked at 100% reads as a hang.
+`ModelPhase` is `ParakeetDownload.Phase` lifted out, plus a fifth case: `.unavailable(String)`.
+Parakeet never produces it — nothing stops Parakeet from running once it's downloaded. Kokoro
+can: the OS guard below disables it outright on macOS 26.4–26.5, and that is a fact about the
+machine, not a failed attempt. `.failed` gets `ModelStateCard`'s "Try again" button; giving
+`.unavailable` the same button would offer a retry that re-runs the identical OS check and
+lands right back on the same message — an action that can never do anything, which is worse
+than none. `.unavailable` exists so a permanent condition gets a plain statement instead of a
+dead button.
 
 ## Kokoro
 
@@ -154,18 +169,30 @@ the ANE. **No new dependency.** Two facts make it cheap:
 `isPreparing`, synthesises off the main actor, and hands the WAV to `playRendered`.
 Synthesis is not instant, so it uses the same in-flight guard as ElevenLabs.
 
-Models land in `~/.cache/fluidaudio/Models/<repo>` (`TtsCacheDirectory`), not the
-Application Support path Parakeet uses. `KokoroDownload` reads that directory for
-`isDownloaded`, size and removal — the three must agree on one definition, as
-`ParakeetModels.directory` already does.
+Models land in **two** directories under `~/.cache/fluidaudio/Models`, not one — this draft's
+single `<repo>` path was wrong. `kokoro-82m-coreml/ANE` holds the seven `.mlmodelc` stages
+and the voice pack Kokoro itself needs. A sibling, `kokoro`, holds a BART G2P model and
+Misaki lexicon (~24 MB) that FluidAudio's StyleTTS2 and Inflect backends also read from —
+despite the folder name, it is not Kokoro-only, it's shared FluidAudio cache that happens to
+sit in a user-level `~/.cache` rather than anything app-scoped. `KokoroModels.isDownloaded`,
+`sizeOnDisk` and `remove()` all read *both* directories: checking only the first would let a
+partially-cleaned second directory report `.ready` while under-counting its size, and the
+next synthesis would silently re-download the missing 24 MB with no progress shown, since a
+`.ready` phase suppresses progress reporting. And because `remove()` deletes both, pressing
+Remove for Kokoro also deletes that shared cache — the honest trade for a "Download 108 MB"
+button whose number already counts it.
 
 **OS guard.** FluidAudio warns that macOS 26.4–26.5 carry an Apple BNNS bug that
 intermittently crashes Kokoro synthesis (FluidInference/FluidAudio#844); 26.6 fixes it. The
 package targets macOS 26. On an affected build the Local segment for Read aloud is disabled
 with a reason naming the OS version, rather than offering a download that can crash.
 
-Voice choice stays on the Read aloud page: a picker of Kokoro voices when Kokoro is
-selected, defaulting to `af_heart`, beside the existing system-voice picker.
+Voice choice stays on the Read aloud page, but not as a picker: Kokoro's ANE voice pack
+ships exactly one English voice, `af_heart`. Selecting Kokoro **replaces** the system-voice
+picker with a plain label naming that one voice, rather than sitting beside it — there is
+no second control to sit beside, and a `Picker` over a single, permanently-selected option
+would promise a choice the model doesn't offer. This becomes a real picker again once
+FluidInference ships more ANE voices.
 
 ## Settings
 
@@ -209,10 +236,20 @@ lives in a testable target, and has tests — so it is written test-first.
 
 ## What moves, and what does not
 
-AI Models becomes the only place an engine is **chosen**. No control appears twice.
+AI Models becomes the only place a **tier** is chosen — Apple, Local, or Cloud, for each of
+the three jobs. No tier control appears twice.
 
-- **Cleanup & AI** loses its Provider picker; keeps when-to-rewrite, mode, API key, model
-  ID, Test. Its Cloud card's "Configure" button opens it.
+That is a narrower claim than "no control appears twice," and it matters where Rewrite is
+concerned: AI Models' Cloud card only has a "Configure" button that opens Cleanup & AI, so
+*something* on that page has to let the user pick and configure a provider, key and model —
+five providers, a key field, and a model picker have nowhere to fit on the AI Models card
+itself. Cleanup & AI therefore **keeps its Provider picker**, alongside when-to-rewrite,
+mode, API key, model ID and Test. An earlier build of this page removed that picker on the
+theory that AI Models would own provider choice too; it never did, which left OpenAI (and
+every provider but whatever was already stored) permanently unreachable. The division that
+actually holds is: AI Models chooses the tier, Cleanup & AI configures which cloud provider
+backs the Cloud tier.
+
 - **Read aloud** loses the `System | ElevenLabs` segmented control; keeps the on/off toggle,
   reading modes, voice pickers, speed, preview, ElevenLabs key and voice.
 
@@ -224,8 +261,12 @@ model. Touches: `EngineComparison`, `ComparisonWindow`, `WisprTrigger`,
 `DictationController` (`isComparing`, the compare branch), `OrbitFlowApp` (menu toggle,
 window, `showComparisonWindow`), `DashboardHTML.emptyState`, `RunLog`, `Settings`.
 
-`RunLog`'s stored `compareMode` field stays readable so existing history still decodes; it
-is simply never written `true` again.
+`RunLog` never had a stored `compareMode` field to begin with — `DictationRun` records which
+engine produced a run in its existing `engine` string field, and Compare mode's own window
+read two runs sharing a `group` id rather than a flag on either one. There is nothing to keep
+readable here: `DictationRun.init(from:)` decodes only the keys it lists in `CodingKeys` and
+silently ignores anything else in an old JSON line, which is what already lets history
+written by any past build — with or without a comparison feature — keep decoding today.
 
 ## Testing
 
