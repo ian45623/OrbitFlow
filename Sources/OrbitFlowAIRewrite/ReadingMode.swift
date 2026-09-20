@@ -25,6 +25,9 @@ public enum ReadingMode: String, CaseIterable, Sendable {
     case giveExample
     case makeMeUnderstand
     case explainLikeImFive
+    /// A dictionary entry, spoken. The one mode whose subject is the highlighted text
+    /// rather than its content — for the word you didn't know, not the page it sat in.
+    case synonyms
     /// The user's own instruction, from Settings.
     case custom
 
@@ -41,6 +44,7 @@ public enum ReadingMode: String, CaseIterable, Sendable {
         case .giveExample: "Show me"
         case .makeMeUnderstand: "Explain"
         case .explainLikeImFive: "Simple"
+        case .synonyms: "Synonyms"
         case .custom: "Custom"
         }
     }
@@ -70,6 +74,8 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             "Explains it — names the assumptions, defines the jargon, says why it matters."
         case .explainLikeImFive:
             "Plain words, short sentences, everyday comparisons."
+        case .synonyms:
+            "Reads a highlighted word like a dictionary — what it means, similar words, one example."
         case .custom:
             "Your own instruction, written below."
         }
@@ -213,6 +219,25 @@ public enum ReadingMode: String, CaseIterable, Sendable {
             Explain the passage in the simplest language that is still true. Short \
             sentences. Everyday words. Compare unfamiliar things to familiar ones. Do not \
             talk down to the listener and do not add cutesy framing — simple, not childish.
+            """
+        case .synonyms:
+            """
+            Read the whole highlighted text back as a spoken dictionary entry. Whatever \
+            was highlighted is the headword — one word, or a phrase defined as a phrase. \
+            Do not break it into parts, and never ask for a shorter selection.
+
+            Say, in this order and as plain sentences with nothing announcing them: the \
+            headword and what kind of word it is; what it means, in everyday language; \
+            then "Similar words:" and three or four of them; then one short example \
+            sentence using the headword. About four lines in all. Where the term has more \
+            than one common sense, give the commonest and name the next in half a sentence.
+
+            This mode is the only exception to the rule above against adding what is not \
+            in the passage: a definition is by its nature knowledge about a word rather \
+            than from it. The exception covers ordinary dictionary knowledge about the \
+            highlighted term and nothing else. The example sentence is yours to invent; \
+            invent nothing besides it. If the term means nothing to you, say so in one \
+            line rather than guessing.
             """
         case .custom:
             // Never used — callers build the custom prompt with `customSystemPrompt`.

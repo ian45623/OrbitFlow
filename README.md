@@ -41,7 +41,8 @@ works with Wi-Fi off.
   the wrong place. Open any entry to copy it, rewrite it or hear it read back.
 - **Read aloud.** Highlight text in any app and a small pill offers to read it to you. You
   can have it read as written, or ask for a summary, the gist, bullet points or a simpler
-  explanation first. Uses a system voice by default, or download Kokoro for warmer, more
+  explanation first. Highlight a word you don't know and Synonyms reads it back like a
+  dictionary: what it means, similar words and an example. Uses a system voice by default, or download Kokoro for warmer, more
   natural speech that still runs on the Mac. Off by default.
 - **Optional AI rewrite.** Turn a rambling voice note into a clear message: Faithful,
   Casual, Professional or Problem-solver. Use Apple Intelligence on your Mac, or bring your
