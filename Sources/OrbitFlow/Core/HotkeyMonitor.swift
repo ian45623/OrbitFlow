@@ -181,6 +181,11 @@ final class HotkeyMonitor {
         case .leftMouseUp:
             let start = mouseDownLocation ?? location
             mouseDownLocation = nil
+            // A click on the pill or one of its menus says nothing about the selection in the
+            // app underneath. Picking a reading mode is a plain click, and in an app that
+            // won't share its selection a plain click reads as a deselect — which dismissed
+            // the pill, menu and all, before the choice could land.
+            guard !isOwnWindow(at: location) else { return false }
             let distance = hypot(location.x - start.x, location.y - start.y)
             onMouseUp?(isSelectionGesture(dragDistance: distance, clickCount: clickCount))
             return false
@@ -188,5 +193,20 @@ final class HotkeyMonitor {
         default:
             return false
         }
+    }
+
+    /// Whether the topmost window at `location` — top-left-origin, as a `CGEvent` reports
+    /// it — is this app's. Asked of the window server rather than `NSApp.windows`, because
+    /// an open menu is a window of ours that `NSApp.windows` doesn't list.
+    private func isOwnWindow(at location: CGPoint) -> Bool {
+        guard let primary = NSScreen.screens.first else { return false }
+        let point = NSPoint(x: location.x, y: primary.frame.maxY - location.y)
+        let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        guard number > 0,
+              let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(number))
+                as? [[String: Any]],
+              let owner = info.first?[kCGWindowOwnerPID as String] as? pid_t
+        else { return false }
+        return owner == getpid()
     }
 }
