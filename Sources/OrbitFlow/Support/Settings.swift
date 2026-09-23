@@ -205,6 +205,14 @@ final class Settings {
         didSet { defaults.set(soundEnabled, forKey: Keys.soundEnabled) }
     }
 
+    /// Turn the system volume down while the microphone is open, and back up after.
+    ///
+    /// On by default: whatever's playing through the speakers is otherwise transcribed
+    /// along with the user, and the level is put back the moment capture stops.
+    var duckAudio: Bool {
+        didSet { defaults.set(duckAudio, forKey: Keys.duckAudio) }
+    }
+
     /// Offer to read highlighted text aloud from the pill.
     ///
     /// Off by default: with it on, the pill appears every time a selection is made with the
@@ -340,6 +348,7 @@ final class Settings {
         static let legacyPushToTalkKey = "pushToTalkKey"
         static let cleanupEnabled = "cleanupEnabled"
         static let soundEnabled = "soundEnabled"
+        static let duckAudio = "duckAudio"
         static let engine = "engine"
         /// Read once, never written: migrated into `cleanupTier` in `init`.
         static let legacySmartCleanup = "smartCleanup"
@@ -437,6 +446,7 @@ final class Settings {
         autoUpdate = defaults.object(forKey: Keys.autoUpdate) as? Bool ?? false
         onboardingCompleted = defaults.bool(forKey: Keys.onboardingCompleted)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
+        duckAudio = defaults.object(forKey: Keys.duckAudio) as? Bool ?? true
         hudSize = HUDSize(rawValue: defaults.string(forKey: Keys.hudSize) ?? "") ?? .full
         readAloudEnabled = defaults.object(forKey: Keys.readAloudEnabled) as? Bool ?? false
         readAloudVoice = defaults.string(forKey: Keys.readAloudVoice)

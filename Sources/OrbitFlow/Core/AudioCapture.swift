@@ -1,5 +1,7 @@
 import AVFoundation
+import CoreAudio
 import Foundation
+import OrbitFlowAudio
 
 /// Microphone capture with on-the-fly conversion to whatever format the speech engine wants.
 ///
@@ -16,8 +18,19 @@ final class AudioCapture: @unchecked Sendable {
     /// Called on the audio thread with a 0…1 RMS level, for the HUD waveform.
     private nonisolated(unsafe) var onLevel: (@Sendable (Float) -> Void)?
 
+    /// Output ducking lives here because the microphone's lifetime is exactly the window
+    /// that should be quiet, and every way a dictation ends — release, cancel, teardown,
+    /// failure — already comes through `stop()`. Main-thread only, like `start`/`stop`.
+    private var duck = AudioDuck()
+    /// The device we ducked, not whatever is default by the time we restore: unplugging
+    /// headphones mid-dictation must not have the speakers "restored" to the headphones'
+    /// level.
+    private var duckedDevice: AudioDeviceID?
+
+    /// - Parameter ducking: quiet the default output device until `stop()`.
     func start(
         outputFormat: AVAudioFormat,
+        ducking: Bool,
         onBuffer: @escaping @Sendable (AudioChunk) -> Void,
         onLevel: @escaping @Sendable (Float) -> Void
     ) throws {
@@ -43,6 +56,7 @@ final class AudioCapture: @unchecked Sendable {
         try engine.start()
         isRunning = true
         Log.audio.info("capture started — native \(nativeFormat.sampleRate)Hz → engine \(outputFormat.sampleRate)Hz")
+        if ducking { duckOutput() }
     }
 
     func stop() {
@@ -53,7 +67,38 @@ final class AudioCapture: @unchecked Sendable {
         converter = nil
         onBuffer = nil
         onLevel = nil
+        restoreOutput()
         Log.audio.info("capture stopped")
+    }
+
+    // MARK: - Ducking
+
+    private func duckOutput() {
+        guard let device = SystemVolume.defaultOutputDevice(),
+              let current = SystemVolume.level(of: device),
+              let target = duck.duck(from: current, muted: SystemVolume.isMuted(device))
+        else { return }
+        guard SystemVolume.setLevel(target, on: device) else {
+            // Nothing changed, so there is nothing to put back.
+            duck = AudioDuck()
+            return
+        }
+        duckedDevice = device
+        Log.audio.info("ducked output \(current) → \(target)")
+    }
+
+    private func restoreOutput() {
+        guard let device = duckedDevice else { return }
+        duckedDevice = nil
+        // A device that has gone away reads nil; there's no level left to restore.
+        let restored = SystemVolume.level(of: device).flatMap { duck.restore(current: $0) }
+        duck = AudioDuck()
+        if let restored {
+            SystemVolume.setLevel(restored, on: device)
+            Log.audio.info("restored output → \(restored)")
+        } else {
+            Log.audio.info("output left as the user set it")
+        }
     }
 
     // MARK: - Audio thread

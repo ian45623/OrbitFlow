@@ -288,6 +288,18 @@ struct SettingsPanel: View {
 
             Hairline()
 
+            SettingsRow(
+                label: "Duck audio",
+                help: "Turns down whatever's playing while you talk, and puts it back when "
+                    + "you stop. If you change the volume mid-dictation, yours is kept."
+            ) {
+                Toggle("", isOn: $settings.duckAudio)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            Hairline()
+
             SettingsRow(label: "Clean up text", help: "Drops fillers, fixes spacing and punctuation.") {
                 Toggle("", isOn: $settings.cleanupEnabled)
                     .toggleStyle(.switch)

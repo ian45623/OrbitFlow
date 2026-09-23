@@ -58,6 +58,14 @@ let package = Package(
             path: "Sources/OrbitFlowModels",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // What to set the system volume to while the microphone is open, and whether to put
+        // it back: "the user moved the slider mid-dictation, so leave it" is a rule worth a
+        // test, and the CoreAudio calls that act on it can't run under one.
+        .target(
+            name: "OrbitFlowAudio",
+            path: "Sources/OrbitFlowAudio",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "OrbitFlow",
             dependencies: [
@@ -67,6 +75,7 @@ let package = Package(
                 "OrbitFlowStats",
                 "OrbitFlowHistory",
                 "OrbitFlowModels",
+                "OrbitFlowAudio",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/OrbitFlow",
@@ -109,6 +118,12 @@ let package = Package(
             name: "OrbitFlowModelsTests",
             dependencies: ["OrbitFlowModels"],
             path: "Tests/OrbitFlowModelsTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "OrbitFlowAudioTests",
+            dependencies: ["OrbitFlowAudio"],
+            path: "Tests/OrbitFlowAudioTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
