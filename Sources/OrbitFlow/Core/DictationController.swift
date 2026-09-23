@@ -1029,6 +1029,7 @@ final class DictationController {
                 if case .starting = self.state { Speaker.shared.stop() }
                 try capture.start(
                     outputFormat: format,
+                    ducking: Settings.shared.duckAudio,
                     onBuffer: { chunk in
                         audioContinuation.yield(chunk)
                     },
